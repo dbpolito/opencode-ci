@@ -103,7 +103,7 @@ Do not use this example for public/open-source repositories, fork PRs, or jobs t
 
 Ephemeral runners lose their filesystem after each job. Restore the latest credential from a secret, run `opencode-ci`, then save the updated file back. `PAT_TOKEN` needs permission to update repository Actions secrets; `GITHUB_TOKEN` cannot. A GitHub App token works too.
 
-All jobs sharing the credential, including scheduled keepalives, must use the same concurrency group. Avoid workflow-level cancellation that could interrupt write-back. This example runs manually to avoid untrusted PR code:
+This example runs manually to avoid untrusted PR code. Its `opencode-review` group controls review runs; avoid workflow-level cancellation that could interrupt credential write-back.
 
 ```yaml
 name: Review with ChatGPT OAuth
@@ -117,7 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
-      group: opencode-oauth
+      group: opencode-review
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -144,7 +144,7 @@ Each run uses a fresh OpenCode database and writes refreshed tokens to `~/openco
 
 Do not cache, log, or upload the credential file. A failed refresh or interrupted write-back may require a fresh login and reseed.
 
-If real jobs may be idle, run this daily keepalive (09:00 UTC). It shares the review job's concurrency group so both jobs use the latest credential:
+If real jobs may be idle, run this daily keepalive (09:00 UTC):
 
 ```yaml
 name: Keep OpenCode auth fresh
@@ -181,7 +181,7 @@ jobs:
         run: gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
 ```
 
-The model request makes OpenCode check and refresh an expiring access token; copying the secret without a request does not. Monitor failures and reseed when needed. Codex's weekly cadence is not an OpenCode guarantee.
+The model request makes OpenCode check and refresh an expiring access token; copying the secret without a request does not. These examples use different concurrency groups: if both workflows use the same OAuth secret, overlapping runs can race when refreshing or saving it. Use one shared group or separate credentials if you need to prevent that race. Monitor failures and reseed when needed. Codex's weekly cadence is not an OpenCode guarantee.
 
 ### Persistent self-hosted runner
 
