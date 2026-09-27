@@ -2,15 +2,20 @@
 
 Run OpenCode V2 noninteractively with child-agent output, `/commands`, required skills, and OAuth token write-back. The packaged CLI needs Node.js 24+; an installed OpenCode CLI is not required.
 
-```sh
-npx opencode-ci run 'say hi to 2 subagents in parallel'
-```
+![OpenCode CI terminal output showing two subagents replying, with their names colored](docs/subagent-output-terminal.png)
+
+- Subagent output: see child agents' steps and replies in the log.
+- `/commands`: run a project command from the prompt.
+- `@skills`: the intended skill-mention syntax (currently unreliable in CI; use `--skill` for required skills).
+- Account auth (`~/opencode-ci.auth.json`): an alternative when you can't use an API key.
 
 ## Subagent output
 
-`opencode run` shows a subagent call but not the child's transcript. This client prints the child's steps and replies, with a dim-colored name in terminals and GitHub Actions:
+```sh
+npx opencode-ci run --skill=humanizer 'say hi to 2 subagents in parallel'
+```
 
-![Terminal output showing two subagents replying in parallel, with their names colored](docs/subagent-output.jpeg)
+`opencode run` shows a subagent call but not the child's transcript. This client prints the child's steps and replies, with a dim-colored name in terminals and GitHub Actions.
 
 Child output arrives as text blocks complete, even when subagents overlap. If an event is missed, saved messages are printed before the child's completion line, including when a child session is reused.
 
