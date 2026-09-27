@@ -75,7 +75,7 @@ Set `OPENROUTER_API_KEY` as a repository secret, or use your provider's model an
 
 ## Use your OpenCode login in trusted private CI
 
-OpenAI [documents using Codex account auth in CI/CD](https://learn.chatgpt.com/docs/auth/ci-cd-auth) on trusted private runners when you specifically need to run as that account, though it recommends API keys for most automation. The guide describes Codex's `auth.json`, not OpenCode's credential format, but the same ChatGPT OAuth account needs a working refresh token. Let OpenCode handle refresh during a normal run and preserve the updated credential file, rather than calling the OAuth endpoint yourself. This package does that with OpenCode credentials stored in `opencode-ci.auth.json`. Do not copy Codex's refresh timer or schedule as if they were OpenCode guarantees.
+OpenAI [documents account auth in CI/CD](https://learn.chatgpt.com/docs/auth/ci-cd-auth) for trusted private Codex automation, while recommending API keys for most jobs. OpenCode uses a different credential file, but the same pattern applies: run the client normally and save its refreshed credentials instead of refreshing tokens yourself.
 
 Do not use this example for public/open-source repositories, fork PRs, or jobs that run untrusted code. The workflow must run on trusted infrastructure with access to the account secret. Use a separate credential for CI so local and CI runs do not rotate the same refresh token.
 
@@ -101,9 +101,9 @@ Do not use this example for public/open-source repositories, fork PRs, or jobs t
 
 ### GitHub Actions with OAuth on ephemeral runners
 
-Ephemeral runners lose their filesystem after each job. Restore the **latest** credential from a secret, run `opencode-ci`, then save the updated file back to the secret, even if the review fails. This example uses a PAT with permission to update repository Actions secrets (`GITHUB_TOKEN` cannot update them). Use an appropriately scoped GitHub App token instead if available.
+Ephemeral runners lose their filesystem after each job. Restore the latest credential from a secret, run `opencode-ci`, then save the updated file back. `PAT_TOKEN` needs permission to update repository Actions secrets; `GITHUB_TOKEN` cannot. A GitHub App token works too.
 
-Every workflow using this *same account credential* must use the same job-level concurrency group, including any scheduled maintenance workflow. Do not cancel a job between token refresh and write-back; workflow-level cancellation can still interrupt it even if job-level `cancel-in-progress` is `false`. The example is manually dispatched to avoid exposing credentials to untrusted PR code:
+All jobs sharing the credential, including scheduled keepalives, must use the same concurrency group. Avoid workflow-level cancellation that could interrupt write-back. This example runs manually to avoid untrusted PR code:
 
 ```yaml
 name: Review with ChatGPT OAuth
@@ -130,10 +130,7 @@ jobs:
         id: auth
         env:
           OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
-        run: |
-          test -n "$OPENCODE_CI_AUTH_JSON" || { echo 'Missing OPENCODE_CI_AUTH_JSON'; exit 1; }
-          umask 077
-          printf '%s' "$OPENCODE_CI_AUTH_JSON" > "$HOME/opencode-ci.auth.json"
+        run: printf '%s' "$OPENCODE_CI_AUTH_JSON" > "$HOME/opencode-ci.auth.json"
       - name: Review
         run: npx --yes @kompassdev/opencode-ci@0.1.8 run --auto --model openai/gpt-6-luna 'Review this repository'
       - name: Save refreshed OAuth tokens
@@ -143,11 +140,11 @@ jobs:
         run: gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
 ```
 
-Each run uses a fresh OpenCode database. The CLI never prints credentials and writes refreshed tokens to `~/opencode-ci.auth.json` even if the run fails, provided it started with that file and can finish cleanup. Use `--auth-file PATH` **and** `--auth-output PATH` to write back to another file. The save step cannot recover a process killed before cleanup; if refresh or write-back fails, reseed from a trusted login when necessary.
+Each run uses a fresh OpenCode database and writes refreshed tokens to `~/opencode-ci.auth.json`, including after a failed session if cleanup completes. For another file, use both `--auth-file PATH` and `--auth-output PATH`.
 
-Do not put credentials in Actions cache: cache entries can be read by other workflows in scope, cannot be updated in place, and may disappear. GitHub only masks configured secret values in logs; don't print token fields or upload the credential file.
+Do not cache, log, or upload the credential file. A failed refresh or interrupted write-back may require a fresh login and reseed.
 
-If real jobs may be idle for a while, add a lightweight scheduled `opencode-ci run --model openai/YOUR_MODEL 'Reply only OK. Do not use tools.'` using the **same** restore/run/write-back steps and concurrency group. A daily schedule is a practical starting point (`cron: '0 9 * * *'`, 09:00 UTC); use `workflow_dispatch` as well so you can test or reseed manually. A normal model request makes OpenCode check the credential and refresh it when the access token is near expiry; merely restoring and re-saving a secret does not keep it fresh. An expired *access* token can normally be refreshed later while the *refresh* token remains valid, so hourly runs are not inherently required just because access tokens expire hourly. The refresh token's idle lifetime is not guaranteed here; monitor maintenance failures and reseed when needed rather than assuming Codex's weekly example is safe for OpenCode.
+If real jobs may be idle, schedule a small run such as `opencode-ci run --model openai/YOUR_MODEL 'Reply only OK. Do not use tools.'` with the same restore/run/write-back steps and concurrency group. Daily (`cron: '0 9 * * *'`, 09:00 UTC) is a practical starting point. The run makes OpenCode check and refresh an expiring access token; copying the secret without a model request does not. Monitor failures and reseed when needed; Codex's weekly cadence is not an OpenCode guarantee.
 
 ### Persistent self-hosted runner
 
