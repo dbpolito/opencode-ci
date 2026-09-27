@@ -65,7 +65,7 @@ Required skills are attached directly, without a preliminary catalog lookup. If 
 
 Mentions such as `@review-pr` and `@skill:review-pr` are best-effort: OpenCode's skill catalog can be empty before plugin activation, leaving the mention as plain text. Use `--skill` for CI. See [issue #51680](https://github.com/anomalyco/opencode/issues/51680) and [PR #50430](https://github.com/anomalyco/opencode/pull/50430).
 
-The [review-pr skill](https://github.com/dbpolito/skills/tree/main/skills/review-pr) requires `git`, authenticated `gh`, `jq`, and enough history to compare the PR's base and head commits. Publishing requires PR review permissions. To let the bot approve PRs, enable that option in the repository's Actions settings.
+The [review-pr skill](https://github.com/dbpolito/skills/tree/main/skills/review-pr) requires `git`, authenticated `gh`, `jq`, the PR head checked out, and enough history to compare the PR's base and head commits. Publishing requires PR review permissions. To let the bot approve PRs, enable that option in the repository's Actions settings.
 
 ## GitHub Actions
 

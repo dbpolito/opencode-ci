@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { stripVTControlCharacters } from "node:util"
 import { aborted, assistant, deferred, fixture, subagent, toolEvents } from "./helpers"
 import type { RunOptions } from "../src/run"
 
@@ -16,7 +17,7 @@ function childrenFixture(options: Partial<RunOptions> = {}, titles = ["First tas
 test("recovers parallel child transcripts before their completion without duplicate output", async () => {
   const f = childrenFixture()
   await f.execute()
-  const output = f.output.join("")
+  const output = stripVTControlCharacters(f.output.join(""))
   for (const [index, title] of ["First task", "Second task"].entries()) {
     expect(output.indexOf(`${title} Reply from child_${index}`)).toBeGreaterThan(-1)
     expect(output.indexOf(`${title} Reply from child_${index}`)).toBeLessThan(output.indexOf(`${title} ✓ General Agent`))
@@ -57,6 +58,7 @@ test("keeps reading other children while completion recovery is waiting", async 
   const release = deferred()
   const output: string[] = []
   const f = childrenFixture({ write: (text) => {
+    text = stripVTControlCharacters(text)
     output.push(text)
     if (text.includes("Second task Reply")) release.resolve()
   } })
@@ -80,6 +82,7 @@ test("matches child IDs when descriptions are identical", async () => {
   const release = deferred()
   const output: string[] = []
   const f = childrenFixture({ write: (text) => {
+    text = stripVTControlCharacters(text)
     output.push(text)
     if (text.includes("Same task ✓")) release.resolve()
   } }, ["Same task", "Same task"])
@@ -100,6 +103,7 @@ test("replays a resumed child's new messages before its next completion", async 
   const second = deferred()
   const output: string[] = []
   const f = childrenFixture({ write: (text) => {
+    text = stripVTControlCharacters(text)
     output.push(text)
     if (text.includes("First task ✓")) first.resolve()
     if (text.includes("Follow-up ✓")) second.resolve()

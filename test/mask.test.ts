@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { stripVTControlCharacters } from "node:util"
 import { createMask, githubMask } from "../src/mask"
 import type { Auth } from "../src/auth"
 import { assistant, fixture } from "./helpers"
@@ -84,7 +85,7 @@ test("redacts assistant, reasoning, child and tool output on both channels", asy
   await f.execute()
   expect(stdout.join("")).toContain("Using [REDACTED]")
   expect(stdout.join("")).toContain("Thinking: Checking [REDACTED]")
-  expect(stdout.join("")).toContain("[REDACTED] Child [REDACTED]")
+  expect(stripVTControlCharacters(stdout.join(""))).toContain("[REDACTED] Child [REDACTED]")
   expect(stderr.join("")).toContain("$ echo [REDACTED]")
   expect(stderr.join("")).toContain("Failed [REDACTED]")
   expect(stderr.join("")).toContain('custom {"credential":"[REDACTED]"}')
