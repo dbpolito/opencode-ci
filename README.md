@@ -27,14 +27,15 @@ npx opencode-ci run '/review the changed tests'
 
 ## `@skills`
 
-The intended interface is to mention an installed skill in the prompt. For example, install [`review-pr`](https://github.com/dbpolito/skills/tree/main/skills/review-pr) from [dbpolito/skills](https://github.com/dbpolito/skills) and run (`bunx` works too):
+The intended interface is to mention an installed skill in the prompt, such as [`review-pr`](https://github.com/dbpolito/skills/tree/main/skills/review-pr) from [dbpolito/skills](https://github.com/dbpolito/skills):
 
 ```sh
 npx skills add dbpolito/skills --skill review-pr -g -a opencode
-bunx opencode-ci run --auto 'Use @review-pr to review and publish findings for PR #123 in owner/repo'
+# Currently not reliable in CI:
+# bunx opencode-ci run --auto 'Use @review-pr to review and publish findings for PR #123 in owner/repo'
 ```
 
-**Do not rely on this syntax for CI yet.** OpenCode's skill catalog can return no skills before plugin activation, so `opencode-ci` may silently leave `@review-pr` as plain text. The upstream fix is in [OpenCode PR #50430](https://github.com/anomalyco/opencode/pull/50430); until it is available in the SDK, use `--skill` for required skills. `@skill:review-pr` has the same limitation. The `/review` command example above requires a project command named `review`. The skill requires `git`, authenticated `gh`, `jq`, the PR head checked out, and enough history to find its merge base; publishing requires PR review permissions.
+OpenCode's skill catalog can be empty before plugin activation, leaving `@review-pr` as plain text. See [issue #51680](https://github.com/anomalyco/opencode/issues/51680) and [PR #50430](https://github.com/anomalyco/opencode/pull/50430). `@skill:review-pr` has the same limitation.
 
 ## Required skills in CI
 
@@ -46,6 +47,8 @@ bunx opencode-ci run --skill=review-pr --skill=security 'Review this PR'
 ```
 
 Required skills are attached directly, without a preliminary skill-list lookup. If any is unavailable, OpenCode rejects the prompt instead of running without it. `--skill` cannot be combined with a `/command` prompt; `@` mentions remain best-effort.
+
+The `review-pr` skill requires `git`, authenticated `gh`, `jq`, the PR head checked out, and enough history to find its merge base; publishing requires PR review permissions.
 
 ## OAuth credentials (advanced)
 
