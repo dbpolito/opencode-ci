@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@kompassdev/opencode-ci",
+      "name": "@dbpolito/opencode-ci",
       "dependencies": {
         "@opencode/sdk": "2.0.16",
         "commander": "15.0.0",
