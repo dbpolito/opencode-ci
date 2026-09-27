@@ -75,7 +75,7 @@ Set `OPENROUTER_API_KEY` as a repository secret, or use your provider's model an
 
 ## Use your OpenCode login in trusted private CI
 
-OpenAI [recommends API keys for automation](https://learn.chatgpt.com/docs/auth/ci-cd-auth). Its account-auth guide is **specific to Codex**, not OpenCode: Codex's `auth.json` format, refresh timing, and suggested schedule do not apply to `opencode-ci`. The common principle is to let the client handle refresh and preserve its updated credential file, rather than calling an OAuth refresh endpoint in CI. This package does that with OpenCode credentials stored in `opencode-ci.auth.json`.
+OpenAI [recommends API keys for automation](https://learn.chatgpt.com/docs/auth/ci-cd-auth). Its account-auth guide describes Codex's `auth.json`, not OpenCode's credential format, but the same ChatGPT OAuth account needs a working refresh token. Let OpenCode handle refresh during a normal run and preserve the updated credential file, rather than calling the OAuth endpoint yourself. This package does that with OpenCode credentials stored in `opencode-ci.auth.json`. Do not copy Codex's refresh timer or schedule as if they were OpenCode guarantees.
 
 Do not use this example for public/open-source repositories, fork PRs, or jobs that run untrusted code. The workflow must run on trusted infrastructure with access to the account secret. Use a separate credential for CI so local and CI runs do not rotate the same refresh token.
 
@@ -145,7 +145,9 @@ jobs:
 
 Each run uses a fresh OpenCode database. The CLI never prints credentials and writes refreshed tokens to `~/opencode-ci.auth.json` even if the run fails, provided it started with that file and can finish cleanup. Use `--auth-file PATH` **and** `--auth-output PATH` to write back to another file. The save step cannot recover a process killed before cleanup; if refresh or write-back fails, reseed from a trusted login when necessary.
 
-Do not put credentials in Actions cache: cache entries can be read by other workflows in scope, cannot be updated in place, and may disappear. GitHub only masks configured secret values in logs; don't print token fields or upload the credential file. If regular jobs do not run often enough to keep the credential valid, add a lightweight scheduled `opencode-ci run` using the same restore/run/write-back pattern and concurrency group. Choose its interval for your provider's behavior; do not assume Codex's schedule applies to OpenCode.
+Do not put credentials in Actions cache: cache entries can be read by other workflows in scope, cannot be updated in place, and may disappear. GitHub only masks configured secret values in logs; don't print token fields or upload the credential file.
+
+If real jobs may be idle for a while, add a lightweight scheduled `opencode-ci run --model openai/YOUR_MODEL 'Reply only OK. Do not use tools.'` using the **same** restore/run/write-back steps and concurrency group. A normal model request makes OpenCode check the credential and refresh it when the access token is near expiry; merely restoring and re-saving a secret does not keep it fresh. An hourly schedule is a conservative choice if keeping the account session alive matters and the small usage and CI overhead are acceptable. An expired *access* token can normally be refreshed later while the *refresh* token remains valid, so hourly runs are not inherently required just because access tokens expire hourly. The refresh token's idle lifetime is not guaranteed here; monitor maintenance failures and reseed when needed instead of assuming Codex's weekly example is safe for OpenCode.
 
 ### Persistent self-hosted runner
 
