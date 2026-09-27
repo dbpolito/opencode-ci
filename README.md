@@ -120,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
-      group: opencode-review
+      group: opencode-review-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -190,7 +190,7 @@ jobs:
         run: gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
 ```
 
-The model request makes OpenCode check and refresh an expiring access token; copying the secret without a request does not. These examples use different concurrency groups: if both workflows use the same OAuth secret, overlapping runs can race when refreshing or saving it. Use one shared group or separate credentials if you need to prevent that race. Monitor failures and reseed when needed. Codex's weekly cadence is not an OpenCode guarantee.
+The model request makes OpenCode check and refresh an expiring access token; copying the secret without a request does not. Review jobs for different PRs and the keepalive use different concurrency groups. If they share one OAuth secret, overlapping runs can race when refreshing or saving it; use one shared group or separate credentials to prevent that race. Monitor failures and reseed when needed. Codex's weekly cadence is not an OpenCode guarantee.
 
 ### Persistent self-hosted runner
 
