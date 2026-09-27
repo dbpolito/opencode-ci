@@ -1,5 +1,7 @@
 # OpenCode CI
 
+![OpenCode CI terminal output showing two subagents replying, with their names colored](docs/subagent-output-terminal.png)
+
 - Subagent output: see child agents' steps and replies in the log.
 - `/commands`: run a project command from the prompt.
 - `@skills`: the intended skill-mention syntax (currently unreliable in CI; use `--skill` for required skills).
@@ -11,9 +13,7 @@
 npx opencode-ci run --skill=humanizer 'say hi to 2 subagents in parallel'
 ```
 
-`opencode run` shows a subagent call but not the child's transcript. This client prints the child's steps and replies, with a dim-colored name in terminals and GitHub Actions:
-
-![OpenCode CI terminal output showing two subagents replying, with their names colored](docs/subagent-output-terminal.png)
+`opencode run` shows a subagent call but not the child's transcript. This client prints the child's steps and replies, with a dim-colored name in terminals and GitHub Actions.
 
 Child output streams as it arrives, even when subagents overlap. If the event stream misses a message, the client prints the saved message before that subagent's completion line.
 
