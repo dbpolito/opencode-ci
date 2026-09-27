@@ -9,10 +9,10 @@
   "files": ["dist", "docs", "README.md"],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kompassdev/opencode-ci.git"
+    "url": "git+https://github.com/dbpolito/opencode-ci.git"
   },
-  "homepage": "https://github.com/kompassdev/opencode-ci#readme",
-  "bugs": "https://github.com/kompassdev/opencode-ci/issues",
+  "homepage": "https://github.com/dbpolito/opencode-ci#readme",
+  "bugs": "https://github.com/dbpolito/opencode-ci/issues",
   "publishConfig": {
     "access": "public"
   },
