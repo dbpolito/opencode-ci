@@ -2,3 +2,5 @@ node_modules/
 dist/
 *.tgz
 auth.json
+opencode-ci.auth.json
+opencode-ci.auth.json.*.tmp
