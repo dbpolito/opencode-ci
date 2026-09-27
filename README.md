@@ -8,7 +8,7 @@
 ## Subagent output
 
 ```sh
-npx @dbpolito/opencode-ci run 'say hi to 2 subagents in parallel'
+npx opencode-ci run 'say hi to 2 subagents in parallel'
 ```
 
 `opencode run` shows a subagent call but not the child's transcript. This client prints the child's steps and replies, with a dim-colored name in terminals and GitHub Actions:
@@ -22,7 +22,7 @@ Child output streams as it arrives, even when subagents overlap. If the event st
 Run a command defined in your OpenCode project:
 
 ```sh
-npx @dbpolito/opencode-ci run '/review the changed tests'
+npx opencode-ci run '/review the changed tests'
 ```
 
 ## `@skill`
@@ -30,7 +30,7 @@ npx @dbpolito/opencode-ci run '/review the changed tests'
 Mention a project skill to attach it. `bunx` works too:
 
 ```sh
-bunx @dbpolito/opencode-ci run 'Use @review to inspect the changes'
+bunx opencode-ci run 'Use @review to inspect the changes'
 ```
 
 You can also write `@skill:review`. The command and skill examples require a project definition named `review`.
@@ -40,7 +40,7 @@ You can also write `@skill:review`. The command and skill examples require a pro
 Prefer a provider API key for automation; see the [GitHub Actions example](#api-key). Only use account credentials on trusted private infrastructure when you specifically need that account. The client reads `~/opencode-ci.auth.json` when it exists and saves refreshed tokens to the same file:
 
 ```sh
-npx @dbpolito/opencode-ci run --model openai/gpt-6-luna 'Review this repository'
+npx opencode-ci run --model openai/gpt-6-luna 'Review this repository'
 ```
 
 See [how to export your login](#use-your-opencode-login-in-ci) and [use it in GitHub Actions](#github-actions-with-oauth-on-ephemeral-runners). Treat this file like a password: never commit it, log it, or upload it as a build artifact.
@@ -67,7 +67,7 @@ jobs:
       - name: Review
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: npx --yes @dbpolito/opencode-ci@0.1.9 run --auto --model openrouter/anthropic/claude-sonnet-4 'Review this repository for correctness and missing tests'
+        run: npx --yes opencode-ci@0.1.9 run --auto --model openrouter/anthropic/claude-sonnet-4 'Review this repository for correctness and missing tests'
         timeout-minutes: 45
 ```
 
@@ -83,7 +83,7 @@ Do not use this example for public/open-source repositories, fork PRs, or jobs t
 2. Export the saved login:
 
    ```sh
-   npx --yes @dbpolito/opencode-ci@0.1.9 auth export \
+   npx --yes opencode-ci@0.1.9 auth export \
      --db "$(opencode debug paths db)" \
      --integration openai
    ```
@@ -139,7 +139,7 @@ jobs:
       - name: Review
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: npx --yes @dbpolito/opencode-ci@0.1.9 run --auto --model openai/gpt-6-luna "Review the PR diff ($BASE_SHA...HEAD) for bugs. Do not edit files."
+        run: npx --yes opencode-ci@0.1.9 run --auto --model openai/gpt-6-luna "Review the PR diff ($BASE_SHA...HEAD) for bugs. Do not edit files."
       - name: Save refreshed OAuth tokens
         if: always() && steps.auth.outcome == 'success'
         env:
@@ -181,7 +181,7 @@ jobs:
           OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
         run: printf '%s' "$OPENCODE_CI_AUTH_JSON" > "$HOME/opencode-ci.auth.json"
       - name: Refresh via a normal run
-        run: npx --yes @dbpolito/opencode-ci@0.1.9 run --model openai/gpt-6-luna 'Reply only OK. Do not use tools.'
+        run: npx --yes opencode-ci@0.1.9 run --model openai/gpt-6-luna 'Reply only OK. Do not use tools.'
       - name: Save refreshed OAuth tokens
         if: always() && steps.auth.outcome == 'success'
         env:
@@ -200,7 +200,7 @@ On a trusted **persistent** runner with a private home directory, you can seed `
 The CLI has `run`, `auth export`, and `--version`:
 
 ```sh
-npx @dbpolito/opencode-ci run --model openai/gpt-6-luna --agent build 'Review the changed files'
+npx opencode-ci run --model openai/gpt-6-luna --agent build 'Review the changed files'
 ```
 
 | `run` flag | What it does |
@@ -234,4 +234,4 @@ bun run smoke:node
 npm pack --dry-run
 ```
 
-`npm publish` builds the package automatically through `prepack`. It requires publish access to `@dbpolito`.
+`npm publish` builds the package automatically through `prepack`. Publishing the unscoped `opencode-ci` name requires it to be available on npm.

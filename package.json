@@ -1,5 +1,5 @@
 {
-  "name": "@dbpolito/opencode-ci",
+  "name": "opencode-ci",
   "version": "0.1.9",
   "description": "OpenCode V2 CI runner with subagent output and command/skill support",
   "type": "module",
