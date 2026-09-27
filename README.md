@@ -45,6 +45,18 @@ This masks known values; it does not detect every secret in repository files, co
 - Timeouts include reading piped input and startup. SIGINT and SIGTERM interrupt active work. Failed sessions fail the job.
 - Each run starts a fresh session and database. Session continuation, forking, and JSON output are not implemented.
 
+### Skipping project configuration
+
+Project configuration and plugins load normally by default. To opt out for a run:
+
+```sh
+npx opencode-ci run --skip-project-config --model openai/gpt-6-luna 'Review this repository'
+```
+
+This sets the SDK's `config.project: false`, skipping project and ancestor configuration discovery, including `opencode.json(c)` and project `.opencode`, `.agents`, and `.claude` configuration roots. Project plugins and configuration-defined agents, commands, and skills from those roots are unavailable. Global configuration and globally installed skills remain available, as do explicit configuration inputs.
+
+Use this flag when you want to avoid automatically loading checkout-provided configuration and plugins. It is not a sandbox: the agent can still read repository files and execute code through permitted tools, especially with `--auto`.
+
 ## `/commands` and skills
 
 Run a command defined in your OpenCode project:
@@ -165,6 +177,7 @@ npx opencode-ci run --model openai/gpt-6-luna --agent build 'Review the changed 
 | `--file PATH`, `-f` | Include a file, up to 10 MiB; repeat for multiple files |
 | `--thinking` | Print reasoning blocks when available |
 | `--auto` | Approve each permission request once |
+| `--skip-project-config` | Skip project/ancestor configuration and plugin discovery; keep global configuration |
 | `--title TITLE` | Set the session title |
 | `--timeout SECONDS` | Stop after this many seconds (default: 2700) |
 | `--auth-env NAME` | Read auth JSON from an environment variable |

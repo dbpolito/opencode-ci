@@ -36,6 +36,7 @@ type RunFlags = {
   title?: string
   thinking?: boolean
   auto?: boolean
+  skipProjectConfig?: boolean
   timeout: string
   authFile?: string
   authEnv?: string
@@ -81,7 +82,10 @@ async function executeRun(words: string[], options: RunFlags) {
     const temp = await mkdtemp(join(tmpdir(), "opencode-ci-"))
     const db = join(temp, "opencode.db")
     try {
-      const opencode = await OpenCode.create({ database: { path: db }, plugins: [noninteractive] })
+      const opencode = await OpenCode.create({
+        database: { path: db }, plugins: [noninteractive],
+        ...(options.skipProjectConfig ? { config: { project: false } } : {}),
+      })
       try {
         if (auth) {
           setAuth(db, auth)
@@ -132,6 +136,7 @@ const command = program.command("run")
   .option("--title <title>", "session title")
   .option("--thinking", "print reasoning blocks")
   .option("--auto", "approve permission requests once")
+  .option("--skip-project-config", "skip project and ancestor config discovery, including project plugins")
   .option("--timeout <seconds>", "timeout in seconds", "2700")
   .addOption(new Option("--auth-file <path>", "read auth JSON from a file (default: ~/opencode-ci.auth.json if present)").conflicts("authEnv"))
   .addOption(new Option("--auth-env <name>", "read auth JSON from an environment variable").conflicts("authFile"))
