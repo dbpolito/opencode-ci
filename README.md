@@ -3,7 +3,7 @@
 - Subagent output: see child agents' steps and replies in the log.
 - `/commands`: run a project command from the prompt.
 - `@skills`: attach a project skill by mentioning it.
-- OAuth (`~/opencode-ci.auth.json`): use a ChatGPT Plus/Pro (Codex) login in CI instead of an API key.
+- Account auth (`~/opencode-ci.auth.json`): an advanced option for trusted private CI when an API key will not do.
 
 ## Subagent output
 
@@ -35,15 +35,15 @@ bunx @kompassdev/opencode-ci run 'Use @review to inspect the changes'
 
 You can also write `@skill:review`. The command and skill examples require a project definition named `review`.
 
-## OAuth credentials
+## OAuth credentials (advanced)
 
-The client reads `~/opencode-ci.auth.json` when it exists and saves refreshed tokens to the same file:
+Prefer a provider API key for automation; see the [GitHub Actions example](#api-key). Only use account credentials on trusted private infrastructure when you specifically need that account. The client reads `~/opencode-ci.auth.json` when it exists and saves refreshed tokens to the same file:
 
 ```sh
 npx @kompassdev/opencode-ci run --model openai/gpt-6-luna 'Review this repository'
 ```
 
-See [how to export your login](#use-your-opencode-login-in-ci) and [use it in GitHub Actions](#github-actions-with-oauth). Keep credentials out of version control.
+See [how to export your login](#use-your-opencode-login-in-ci) and [use it in GitHub Actions](#github-actions-with-oauth-on-ephemeral-runners). Treat this file like a password: never commit it, log it, or upload it as a build artifact.
 
 ## GitHub Actions
 
@@ -67,19 +67,23 @@ jobs:
       - name: Review
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: npx @kompassdev/opencode-ci run --auto --model openrouter/anthropic/claude-sonnet-4 'Review this repository for correctness and missing tests'
+        run: npx --yes @kompassdev/opencode-ci@0.1.8 run --auto --model openrouter/anthropic/claude-sonnet-4 'Review this repository for correctness and missing tests'
         timeout-minutes: 45
 ```
 
 Set `OPENROUTER_API_KEY` as a repository secret, or use your provider's model and key. Pin the npm package version for production. GitHub does not pass repository secrets to pull requests from forks.
 
-## Use your OpenCode login in CI
+## Use your OpenCode login in trusted private CI
+
+OpenAI [recommends API keys for automation](https://learn.chatgpt.com/docs/auth/ci-cd-auth). Its account-auth guide is **specific to Codex**, not OpenCode: Codex's `auth.json` format, refresh timing, and suggested schedule do not apply to `opencode-ci`. The common principle is to let the client handle refresh and preserve its updated credential file, rather than calling an OAuth refresh endpoint in CI. This package does that with OpenCode credentials stored in `opencode-ci.auth.json`.
+
+Do not use this example for public/open-source repositories, fork PRs, or jobs that run untrusted code. The workflow must run on trusted infrastructure with access to the account secret. Use a separate credential for CI so local and CI runs do not rotate the same refresh token.
 
 1. Log in with the OpenCode CLI or desktop app. For ChatGPT Plus/Pro, choose OpenAI's ChatGPT OAuth method.
 2. Export the saved login:
 
    ```sh
-   npx @kompassdev/opencode-ci auth export \
+   npx --yes @kompassdev/opencode-ci@0.1.8 auth export \
      --db "$(opencode debug paths db)" \
      --integration openai
    ```
@@ -93,11 +97,13 @@ Set `OPENROUTER_API_KEY` as a repository secret, or use your provider's model an
    ```
 
    Do not commit or print the file. Delete the local copy when you no longer need it.
-4. Log out and log in again locally to get a new credential for local use. CI keeps the credential you exported in step 2. Re-export only if you want to replace the CI secret.
+4. Log out and log in again locally to get a new credential for local use. CI keeps the credential you exported in step 2. Re-export only if you need to reseed CI (for example, after the refresh token is revoked or expires).
 
-### GitHub Actions with OAuth
+### GitHub Actions with OAuth on ephemeral runners
 
-This workflow loads `OPENCODE_CI_AUTH_JSON`, runs a review, and saves refreshed tokens back to the secret. `PAT_TOKEN` needs permission to update Actions secrets:
+Ephemeral runners lose their filesystem after each job. Restore the **latest** credential from a secret, run `opencode-ci`, then save the updated file back to the secret, even if the review fails. This example uses a PAT with permission to update repository Actions secrets (`GITHUB_TOKEN` cannot update them). Use an appropriately scoped GitHub App token instead if available.
+
+Every workflow using this *same account credential* must use the same job-level concurrency group, including any scheduled maintenance workflow. Do not cancel a job between token refresh and write-back; workflow-level cancellation can still interrupt it even if job-level `cancel-in-progress` is `false`. The example is manually dispatched to avoid exposing credentials to untrusted PR code:
 
 ```yaml
 name: Review with ChatGPT OAuth
@@ -106,35 +112,44 @@ on: workflow_dispatch
 permissions:
   contents: read
 
-concurrency:
-  group: opencode-oauth-${{ github.repository }}
-  cancel-in-progress: false
-
 jobs:
   review:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    concurrency:
+      group: opencode-oauth-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
       - name: Load OAuth credentials
+        id: auth
         env:
           OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
-        run: printf '%s' "$OPENCODE_CI_AUTH_JSON" > "$HOME/opencode-ci.auth.json"
+        run: |
+          test -n "$OPENCODE_CI_AUTH_JSON" || { echo 'Missing OPENCODE_CI_AUTH_JSON'; exit 1; }
+          umask 077
+          printf '%s' "$OPENCODE_CI_AUTH_JSON" > "$HOME/opencode-ci.auth.json"
       - name: Review
-        run: npx @kompassdev/opencode-ci run --auto --model openai/gpt-6-luna 'Review this repository'
+        run: npx --yes @kompassdev/opencode-ci@0.1.8 run --auto --model openai/gpt-6-luna 'Review this repository'
       - name: Save refreshed OAuth tokens
-        if: always()
+        if: always() && steps.auth.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
 ```
 
-Each run uses a fresh credential database. The CLI never prints the credentials and writes refreshed tokens to `~/opencode-ci.auth.json` even if the run fails. Use `--auth-file PATH` and `--auth-output PATH` for another file. Pin the npm package version in production. On self-hosted runners, protect the initial file's permissions; GitHub only masks secrets in logs.
+Each run uses a fresh OpenCode database. The CLI never prints credentials and writes refreshed tokens to `~/opencode-ci.auth.json` even if the run fails, provided it started with that file and can finish cleanup. Use `--auth-file PATH` **and** `--auth-output PATH` to write back to another file. The save step cannot recover a process killed before cleanup; if refresh or write-back fails, reseed from a trusted login when necessary.
 
-Keep OAuth tokens in a secret, not Actions cache: cache entries can be read by other workflows in scope, cannot be updated, and may disappear. `GITHUB_TOKEN` cannot update Actions secrets, so the save step needs a suitable PAT or GitHub App token. Do not expose either token to untrusted pull requests. Runs sharing a refresh token must not overlap; use the same concurrency group across workflows or a central credential store. If the provider expires idle refresh tokens, schedule a run that loads and saves the secret.
+Do not put credentials in Actions cache: cache entries can be read by other workflows in scope, cannot be updated in place, and may disappear. GitHub only masks configured secret values in logs; don't print token fields or upload the credential file. If regular jobs do not run often enough to keep the credential valid, add a lightweight scheduled `opencode-ci run` using the same restore/run/write-back pattern and concurrency group. Choose its interval for your provider's behavior; do not assume Codex's schedule applies to OpenCode.
+
+### Persistent self-hosted runner
+
+On a trusted **persistent** runner with a private home directory, you can seed `~/opencode-ci.auth.json` from the secret **only if the file is missing**, with mode `0600`, and let later jobs reuse the file. Do not overwrite it from the original secret on every run: that discards refreshed tokens. Keep the runner dedicated or serialize every job sharing that file, and back up or reseed it if refresh stops working. An ephemeral runner needs the secret round-trip above; a persistent directory or Actions cache is not a substitute for a protected credential store on untrusted infrastructure.
 
 ## Command options
 
