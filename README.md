@@ -145,7 +145,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
           OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
-        run: cmp -s "$HOME/opencode-ci.auth.json" <(printf '%s' "$OPENCODE_CI_AUTH_JSON") || gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
+        run: |
+          if ! cmp -s "$HOME/opencode-ci.auth.json" <(printf '%s' "$OPENCODE_CI_AUTH_JSON"); then
+            gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
+          fi
 ```
 
 This prints the review to the Actions log; posting a formal GitHub review requires a separate publishing step. Only grant the account secret to PR authors and code you trust.
@@ -188,7 +191,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
           OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
-        run: cmp -s "$HOME/opencode-ci.auth.json" <(printf '%s' "$OPENCODE_CI_AUTH_JSON") || gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
+        run: |
+          if ! cmp -s "$HOME/opencode-ci.auth.json" <(printf '%s' "$OPENCODE_CI_AUTH_JSON"); then
+            gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
+          fi
 ```
 
 The model request makes OpenCode check and refresh an expiring access token; copying the secret without a request does not. `opencode-ci` leaves the file untouched when credentials haven't changed, so the save steps skip unnecessary secret updates. Review jobs for different PRs and the keepalive still use different concurrency groups: if both refresh concurrently, they can race. Use one shared group or separate credentials to prevent that race. Monitor failures and reseed when needed. Codex's weekly cadence is not an OpenCode guarantee.
