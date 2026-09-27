@@ -31,6 +31,7 @@ export async function run(client: Client, options: RunOptions) {
   const sessions = new Map<string, { label: string; parentID?: string }>()
   const printed = new Map<string, string>()
   const headings = new Set<string>()
+  const attachedSkills = new Map<string, string[]>()
   const renderedTools = new Set<string>()
   const tools = new Map<string, { name: string; input: Record<string, unknown> }>()
   let failure: Error | undefined
@@ -78,7 +79,8 @@ export async function run(client: Client, options: RunOptions) {
   const heading = (sessionID: string, messageID: string, agent: string, model: string) => {
     if (headings.has(messageID)) return
     headings.add(messageID)
-    line(sessionID, `> ${agent} · ${model}\n`)
+    const skills = sessionID === rootID ? ` · ${attachedSkills.get(sessionID)?.join(", ") || "no skills"}` : ""
+    line(sessionID, `> ${agent} · ${model}${skills}\n`)
   }
 
   const toolLine = (sessionID: string, messageID: string, id: string, name: string, input: Record<string, unknown>, content?: ReadonlyArray<{ type: string; text?: string }>, metadata?: Record<string, unknown>, error?: string) => {
@@ -262,6 +264,7 @@ export async function run(client: Client, options: RunOptions) {
           id: match[2]!,
           mention: { start: match.index + match[1]!.length, end: match.index + match[0]!.length, text: match[0]!.trim() },
         }))
+      attachedSkills.set(rootID, [...new Set(skills.map((skill) => skill.id))])
       await client.session.prompt({ sessionID: rootID, text: prompt, files: files.length ? files : undefined, skills }, { signal: options.signal })
     }
 

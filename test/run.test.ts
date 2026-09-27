@@ -97,6 +97,7 @@ test("attaches skill mentions and includes child session output", async () => {
   expect(test.calls.prompt).toEqual({ sessionID: "root", text: "Please @review this", skills: [
     { id: "review", mention: { start: 7, end: 14, text: "@review" } },
   ] })
+  expect(test.output.join("")).toContain("> build · gpt-6-sol · review")
   expect(test.output.join("")).toContain("reviewer child findings")
   expect(test.output.join("")).toContain("summary")
 })
@@ -239,6 +240,8 @@ test("renders run-style step and tool lines with only child output prefixed", as
   const test = fixture({ prompt: "review", children: true, tool: true })
   await test.execute()
   expect(test.output.join("")).toContain("> build · gpt-6-sol")
+  expect(test.output.join("")).toContain("> build · gpt-6-sol · no skills")
+  expect(test.output.join("")).not.toContain("reviewer > reviewer · gpt-6-sol · no skills")
   expect(test.output.join("")).toContain("→ Read src/app.ts")
   expect(test.output.join("")).toContain("reviewer > reviewer · gpt-6-sol")
   expect(test.output.join("")).not.toContain("::group::")
