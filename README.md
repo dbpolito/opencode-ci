@@ -160,7 +160,7 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     concurrency:
-      group: opencode-oauth
+      group: opencode-auth
       cancel-in-progress: false
     steps:
       - uses: actions/setup-node@v4
