@@ -172,7 +172,6 @@ jobs:
           OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
         run: printf '%s' "$OPENCODE_CI_AUTH_JSON" > "$HOME/opencode-ci.auth.json"
       - name: Refresh via a normal run
-        working-directory: ${{ runner.temp }}
         run: npx --yes @kompassdev/opencode-ci@0.1.8 run --model openai/gpt-6-luna 'Reply only OK. Do not use tools.'
       - name: Save refreshed OAuth tokens
         if: always() && steps.auth.outcome == 'success'
