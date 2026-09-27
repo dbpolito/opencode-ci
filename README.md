@@ -67,7 +67,7 @@ jobs:
       - name: Review
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: npx --yes opencode-ci@0.1.9 run --auto --model openrouter/anthropic/claude-sonnet-4 'Review this repository for correctness and missing tests'
+        run: npx --yes opencode-ci@0.1.10 run --auto --model openrouter/anthropic/claude-sonnet-4 'Review this repository for correctness and missing tests'
         timeout-minutes: 45
 ```
 
@@ -83,7 +83,7 @@ Do not use this example for public/open-source repositories, fork PRs, or jobs t
 2. Export the saved login:
 
    ```sh
-   npx --yes opencode-ci@0.1.9 auth export \
+   npx --yes opencode-ci@0.1.10 auth export \
      --db "$(opencode debug paths db)" \
      --integration openai
    ```
@@ -139,7 +139,7 @@ jobs:
       - name: Review
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: npx --yes opencode-ci@0.1.9 run --auto --model openai/gpt-6-luna "Review the PR diff ($BASE_SHA...HEAD) for bugs. Do not edit files."
+        run: npx --yes opencode-ci@0.1.10 run --auto --model openai/gpt-6-luna "Review the PR diff ($BASE_SHA...HEAD) for bugs. Do not edit files."
       - name: Save refreshed OAuth tokens
         if: always() && steps.auth.outcome == 'success'
         env:
@@ -187,7 +187,7 @@ jobs:
           OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
         run: printf '%s' "$OPENCODE_CI_AUTH_JSON" > "$HOME/opencode-ci.auth.json"
       - name: Refresh via a normal run
-        run: npx --yes opencode-ci@0.1.9 run --model openai/gpt-6-luna 'Reply only OK. Do not use tools.'
+        run: npx --yes opencode-ci@0.1.10 run --model openai/gpt-6-luna 'Reply only OK. Do not use tools.'
       - name: Save refreshed OAuth tokens
         if: always() && steps.auth.outcome == 'success'
         env:
