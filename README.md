@@ -13,7 +13,7 @@ npx opencode-ci run --skill=humanizer 'say hi to 2 subagents in parallel'
 
 `opencode run` shows a subagent call but not the child's transcript. This client prints the child's steps and replies, with a dim-colored name in terminals and GitHub Actions:
 
-![OpenCode CI terminal output showing two subagents replying, with their names colored](docs/subagent-output.png)
+![OpenCode CI terminal output showing two subagents replying, with their names colored](docs/subagent-output-framed.png)
 
 Child output streams as it arrives, even when subagents overlap. If the event stream misses a message, the client prints the saved message before that subagent's completion line.
 
