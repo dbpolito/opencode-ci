@@ -103,17 +103,20 @@ Do not use this example for public/open-source repositories, fork PRs, or jobs t
 
 Ephemeral runners lose their filesystem after each job. Restore the latest credential from a secret, run `opencode-ci`, then save the updated file back. `PAT_TOKEN` needs permission to update repository Actions secrets; `GITHUB_TOKEN` cannot. A GitHub App token works too.
 
-This example runs manually to avoid untrusted PR code. Its `opencode-review` group controls review runs; avoid workflow-level cancellation that could interrupt credential write-back.
+This example runs on non-draft PRs from the same trusted private repository, not forks. Its `opencode-review` group controls review runs; avoid workflow-level cancellation that could interrupt credential write-back.
 
 ```yaml
 name: Review with ChatGPT OAuth
-on: workflow_dispatch
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
 
 jobs:
   review:
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
@@ -122,6 +125,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -132,13 +137,18 @@ jobs:
           OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
         run: printf '%s' "$OPENCODE_CI_AUTH_JSON" > "$HOME/opencode-ci.auth.json"
       - name: Review
-        run: npx --yes @kompassdev/opencode-ci@0.1.8 run --auto --model openai/gpt-6-luna 'Review this repository'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: npx --yes @kompassdev/opencode-ci@0.1.8 run --auto --model openai/gpt-6-luna "Review the changes from $BASE_SHA to $HEAD_SHA for bugs. Do not edit files."
       - name: Save refreshed OAuth tokens
         if: always() && steps.auth.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
 ```
+
+This prints the review to the Actions log; posting a formal GitHub review requires a separate publishing step. Only grant the account secret to PR authors and code you trust.
 
 Each run uses a fresh OpenCode database and writes refreshed tokens to `~/opencode-ci.auth.json`, including after a failed session if cleanup completes. For another file, use both `--auth-file PATH` and `--auth-output PATH`.
 
