@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -28,6 +28,7 @@ assert.match(help.stdout, /Usage: opencode-ci/)
 const runHelp = spawnSync(process.execPath, ["dist/cli.js", "run", "--help"], { encoding: "utf8" })
 assert.equal(runHelp.status, 0, runHelp.stderr)
 assert.match(runHelp.stdout, /--auth-output/)
+assert.match(runHelp.stdout, /--skip-project-config/)
 const version = spawnSync(process.execPath, ["dist/cli.js", "--version"], { encoding: "utf8" })
 assert.equal(version.status, 0, version.stderr)
 assert.equal(version.stdout.trim(), packageJSON.version)
@@ -110,5 +111,24 @@ try {
   assert.equal(result.status, 0, result.error?.message ?? result.stderr)
   assert.deepEqual(JSON.parse(readFileSync(exported, "utf8")), auth)
   assert.equal(statSync(exported).mode & 0o777, 0o600)
+
+  const project = join(temp, "project")
+  mkdirSync(project)
+  const plugin = join(temp, ".opencode", "plugins", "smoke")
+  mkdirSync(plugin, { recursive: true })
+  const marker = join(temp, "plugin-loaded")
+  writeFileSync(join(plugin, "index.js"), `import { writeFileSync } from "node:fs";
+    export default { id: "smoke.project", setup() { writeFileSync(${JSON.stringify(marker)}, "loaded") } }`)
+  for (const skip of [false, true]) {
+    rmSync(marker, { force: true })
+    const host = await OpenCode.create({
+      database: { path: join(temp, `config-${skip}.db`) },
+      ...(skip ? { config: { project: false } } : {}),
+    })
+    try {
+      await host.integration.list({ location: { directory: project } }, { signal: AbortSignal.timeout(15_000) })
+      assert.equal(existsSync(marker), !skip, "project plugin discovery must follow config.project")
+    } finally { await host.close() }
+  }
 } finally { rmSync(temp, { recursive: true, force: true }) }
 console.log("Node CLI and embedded OpenCode SDK smoke test passed")
