@@ -108,14 +108,14 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          npx --yes opencode-ci@0.1.12 run --auto --thinking \
+          npx --yes opencode-ci@latest run --auto --thinking \
             --agent "$REVIEW_AGENT" --model "$REVIEW_MODEL" --timeout 2700 \
             --title "review-pr $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" \
             --skill=review-pr \
             'Review and publish findings for the PR supplied in the environment.'
 ```
 
-The workflow pins `opencode-ci` to a version with `--skill`; update that version deliberately when adopting later releases.
+The workflow uses the latest published `opencode-ci`, including `--skill` support.
 
 The [`review-pr` skill](https://github.com/dbpolito/skills/tree/main/skills/review-pr) publishes a GitHub review. To allow the bot to approve PRs, enable that option in the repository's Actions settings.
 
@@ -127,7 +127,7 @@ Prefer an API key when possible. If you use your OpenCode login instead, give CI
 2. Export the saved login:
 
    ```sh
-    npx --yes opencode-ci@0.1.12 auth export \
+    npx --yes opencode-ci@latest auth export \
      --db "$(opencode debug paths db)" \
      --integration openai
    ```
@@ -145,7 +145,7 @@ Prefer an API key when possible. If you use your OpenCode login instead, give CI
 
 ### GitHub Actions with OAuth on ephemeral runners
 
-Set `OPENCODE_MODEL` as a repository variable and add `PAT_TOKEN` as a secret with permission to update Actions secrets (`GITHUB_TOKEN` cannot). This follows the auth variant of the [PR review workflow in dbpolito/skills](https://github.com/dbpolito/skills/blob/main/examples/opencode-review-pr.yml), with a shared concurrency group for all jobs using this credential:
+Set `OPENCODE_MODEL` as a repository variable and add `PAT_TOKEN` as a secret with permission to update Actions secrets (`GITHUB_TOKEN` cannot). This follows the auth variant of the [PR review workflow in dbpolito/skills](https://github.com/dbpolito/skills/blob/main/examples/opencode-review-pr.yml):
 
 ```yaml
 name: opencode-review-pr
@@ -164,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 55
     concurrency:
-      group: opencode-auth
+      group: opencode-review-pr-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
@@ -196,7 +196,7 @@ jobs:
 
       - name: Review
         run: |
-          npx --yes opencode-ci@0.1.12 run --auto --thinking \
+          npx --yes opencode-ci@latest run --auto --thinking \
             --agent "$REVIEW_AGENT" --model "$REVIEW_MODEL" --timeout 2700 \
             --title "review-pr $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" \
             --skill=review-pr \
@@ -255,7 +255,7 @@ jobs:
         env:
           OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL }}
         run: |
-          npx --yes opencode-ci@0.1.12 run --model "$OPENCODE_MODEL" --timeout 120 \
+          npx --yes opencode-ci@latest run --model "$OPENCODE_MODEL" --timeout 120 \
             'Reply only OK. Do not use tools.'
 
       - name: Save refreshed auth credentials
@@ -269,7 +269,7 @@ jobs:
           fi
 ```
 
-The model request makes OpenCode check and refresh an expiring access token; copying the secret without a request does not. `opencode-ci` leaves the file untouched when credentials haven't changed, so the save step skips unnecessary secret updates. **Use one shared concurrency group** for every job using the same credential, including reviews of different PRs and the keepalive; otherwise concurrent refreshes can race. Monitor failures and reseed when needed. Codex's weekly cadence is not an OpenCode guarantee.
+The model request makes OpenCode check and refresh an expiring access token; copying the secret without a request does not. `opencode-ci` leaves the file untouched when credentials haven't changed, so the save step skips unnecessary secret updates. The per-PR review group and keepalive group do **not** serialize access to the same credential across runs; concurrent refreshes can race. Use separate credentials or a shared concurrency group if you need to prevent that race. Monitor failures and reseed when needed. Codex's weekly cadence is not an OpenCode guarantee.
 
 ### Persistent self-hosted runner
 

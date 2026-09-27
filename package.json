@@ -1,6 +1,6 @@
 {
   "name": "opencode-ci",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "OpenCode V2 CI runner with subagent output and command/skill support",
   "type": "module",
   "bin": {
