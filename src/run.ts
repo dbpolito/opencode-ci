@@ -1,9 +1,8 @@
 import type { OpenCode } from "@opencode/sdk"
-import { readFile, stat } from "node:fs/promises"
-import { basename, extname } from "node:path"
+import { preparePrompt } from "./prepare"
 import { renderTool } from "./render-tool"
 
-type Client = Pick<OpenCode.Interface, "session" | "message" | "event" | "skill" | "permission" | "model">
+type Client = Pick<OpenCode.Interface, "session" | "message" | "event" | "skill" | "permission" | "model" | "form">
 
 export type RunOptions = {
   directory: string
@@ -18,16 +17,17 @@ export type RunOptions = {
   files?: string[]
   signal?: AbortSignal
   write?: (text: string) => void
+  writeStatus?: (text: string) => void
 }
 
 /** Run one CI turn against the OpenCode service. */
 export async function run(client: Client, options: RunOptions) {
   const write = options.write ?? ((text: string) => process.stdout.write(text))
+  const writeStatus = options.writeStatus ?? options.write ?? ((text: string) => process.stderr.write(text))
   const controller = new AbortController()
-  const events = client.event.subscribe({ signal: controller.signal })[Symbol.asyncIterator]()
-  // Subscribe before creating the session: subscriptions are live-only.
-  const connected = await events.next()
-  if (connected.done) throw new Error("OpenCode event stream disconnected")
+  const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal
+  const events = client.event.subscribe({ signal })[Symbol.asyncIterator]()
+  let consume = Promise.resolve()
 
   const sessions = new Map<string, { label: string; parentID?: string }>()
   const printed = new Map<string, string>()
@@ -43,7 +43,7 @@ export async function run(client: Client, options: RunOptions) {
       interrupting = client.session.interrupt({ sessionID: rootID }, { signal: AbortSignal.timeout(5000) }).catch(() => {})
   }
   options.signal?.addEventListener("abort", stop, { once: true })
-  const checkCancelled = () => options.signal?.throwIfAborted()
+  const checkCancelled = () => signal.throwIfAborted()
 
   const print = (sessionID: string, messageID: string, ordinal: number, text: string) => {
     const key = `${messageID}:text:${ordinal}`
@@ -52,7 +52,7 @@ export async function run(client: Client, options: RunOptions) {
     const delta = text.startsWith(previous) ? text.slice(previous.length) : text
     printed.set(key, text)
     if (!delta.trim()) return
-    line(sessionID, `${delta.trim()}\n`)
+    textLine(sessionID, delta.trim())
   }
 
   const reasoning = (sessionID: string, messageID: string, ordinal: number, text: string) => {
@@ -62,13 +62,19 @@ export async function run(client: Client, options: RunOptions) {
     if (previous === text) return
     const delta = text.startsWith(previous) ? text.slice(previous.length) : text
     printed.set(key, text)
-    if (delta.trim()) line(sessionID, `Thinking: ${delta.trim()}\n`)
+    if (!delta.trim()) return
+    const thought = `Thinking: ${delta.trim()}`
+    textLine(sessionID, process.stdout.isTTY && color() ? `\x1b[90m\x1b[3m${thought}\x1b[0m` : thought)
   }
 
-  const line = (sessionID: string, text: string) => {
+  const textLine = (sessionID: string, text: string) => {
+    line(sessionID, `${text}\n`, process.stdout.isTTY ? writeStatus : write)
+  }
+
+  const line = (sessionID: string, text: string, output = writeStatus) => {
     const session = sessions.get(sessionID)
-    if (!session?.parentID) return write(text)
-    write(prefix(session.label, text))
+    if (!session?.parentID) return output(text)
+    output(prefix(session.label, text))
   }
 
   const color = () => !process.env.NO_COLOR && (process.stdout.isTTY || process.env.GITHUB_ACTIONS === "true")
@@ -95,16 +101,24 @@ export async function run(client: Client, options: RunOptions) {
 
   const children = new Map<string, string[]>()
   const discover = async (parentID: string) => {
-    const result = await client.session.list({ parentID, limit: 200 }, { signal: options.signal })
-    children.set(parentID, result.data.map((child) => child.id))
-    for (const child of result.data) sessions.set(child.id, { label: child.title ?? child.id, parentID })
+    const ids: string[] = []
+    let cursor: string | undefined
+    do {
+      const result = await client.session.list({ parentID, limit: 200, ...(cursor ? { cursor } : {}) }, { signal })
+      for (const child of result.data) {
+        ids.push(child.id)
+        sessions.set(child.id, { label: child.title ?? child.id, parentID })
+      }
+      cursor = result.cursor.next ?? undefined
+    } while (cursor)
+    children.set(parentID, ids)
   }
 
   const replay = async (id: string) => {
     let cursor: string | undefined
     const messages = [] as Awaited<ReturnType<Client["message"]["list"]>>["data"][number][]
     do {
-      const page = await client.message.list({ sessionID: id, limit: 200, ...(cursor ? { cursor } : { order: "desc" }) }, { signal: options.signal })
+      const page = await client.message.list({ sessionID: id, limit: 200, ...(cursor ? { cursor } : { order: "desc" }) }, { signal })
       messages.push(...page.data)
       cursor = page.cursor.next ?? undefined
     } while (cursor)
@@ -117,6 +131,7 @@ export async function run(client: Client, options: RunOptions) {
         if (content.type === "text") print(id, message.id, ordinal++, content.text)
         if (content.type === "reasoning") reasoning(id, message.id, reasoningOrdinal++, content.text)
         if (content.type === "tool" && (content.state.status === "completed" || content.state.status === "error")) {
+          if (renderedTools.has(`${message.id}:${content.id}`)) continue
           if (content.name === "subagent" || content.name === "task") await flushChild(id, content.state.input, content.state.metadata)
           toolLine(id, message.id, content.id, content.name, content.state.input, content.state.content, content.state.metadata,
             content.state.status === "error" ? content.state.error.message : undefined)
@@ -140,9 +155,9 @@ export async function run(client: Client, options: RunOptions) {
       let pending = flushing.get(id)
       if (!pending) {
         pending = (async () => {
-          await client.session.wait({ sessionID: id }, { signal: options.signal })
+          await client.session.wait({ sessionID: id }, { signal })
           await replay(id)
-        })()
+        })().finally(() => flushing.delete(id))
         flushing.set(id, pending)
       }
       await pending
@@ -154,16 +169,49 @@ export async function run(client: Client, options: RunOptions) {
     while (finishing.size) await Promise.all(finishing)
   }
 
-  const consume = (async () => {
-    while (!controller.signal.aborted) {
+  const handledForms = new Set<string>()
+  const cancelForm = async (form: { id: string; sessionID: string }) => {
+    if (handledForms.has(form.id)) return
+    handledForms.add(form.id)
+    try {
+      await client.session.form.cancel({ sessionID: form.sessionID, formID: form.id }, {
+        signal,
+        ...(form.sessionID === "global" ? { headers: { "x-opencode-directory": encodeURIComponent(options.directory) } } : {}),
+      })
+    } catch (error) {
+      if (error && typeof error === "object" && "_tag" in error && error._tag === "FormAlreadySettledError") return
+      throw error
+    }
+    failure ??= new Error("Interactive input is unavailable in CI")
+    line(form.sessionID, "Interactive input requested; cancelling in CI\n")
+  }
+
+  const handledPermissions = new Set<string>()
+  const replyPermission = async (request: { sessionID: string; id: string; action: string; resources: ReadonlyArray<string> }) => {
+    if (handledPermissions.has(request.id)) return
+    handledPermissions.add(request.id)
+    await client.permission.reply({ sessionID: request.sessionID, requestID: request.id, decision: options.auto ? "once" : "reject" }, { signal })
+    if (options.auto) return
+    failure ??= new Error(`Permission denied: ${request.action} (${request.resources.join(", ")})`)
+    await client.session.interrupt({ sessionID: request.sessionID }, { signal })
+  }
+
+  const consumeEvents = async () => {
+    while (!signal.aborted) {
       const item = await events.next()
       if (item.done) {
-        if (!controller.signal.aborted) failure = new Error("OpenCode event stream disconnected")
+        if (!signal.aborted) throw new Error("OpenCode event stream disconnected")
         return
       }
       const event = item.value
       if (event.type === "session.created" && event.data.parentID && sessions.has(event.data.parentID)) {
         sessions.set(event.data.sessionID, { label: event.data.title ?? event.data.sessionID, parentID: event.data.parentID })
+      }
+      if (event.type === "form.created") {
+        if (sessions.has(event.data.form.sessionID) ||
+          (rootID && event.data.form.sessionID === "global" && event.location?.directory === options.directory))
+          await cancelForm(event.data.form)
+        continue
       }
       if (!("sessionID" in event.data) || !sessions.has(event.data.sessionID)) continue
       if (event.type === "session.text.ended") {
@@ -201,19 +249,25 @@ export async function run(client: Client, options: RunOptions) {
         failure = new Error(event.data.error.message)
       }
       if (event.type === "permission.asked") {
-        // CI cannot answer a prompt. Reject it rather than hanging indefinitely.
-        await client.permission.reply({ sessionID: event.data.sessionID, requestID: event.data.id, decision: options.auto ? "once" : "reject" })
-        if (!options.auto) failure = new Error(`Permission denied: ${event.data.action} (${event.data.resources.join(", ")})`)
+        await replyPermission(event.data)
       }
     }
-  })().catch((error: unknown) => {
-    if (!controller.signal.aborted) failure = error instanceof Error ? error : new Error(String(error))
-  })
+  }
 
   try {
     checkCancelled()
+    // Subscribe before creating the session: subscriptions are live-only.
+    const connected = await events.next()
+    checkCancelled()
+    if (connected.done) throw new Error("OpenCode event stream disconnected")
+    consume = consumeEvents().catch((error: unknown) => {
+      if (signal.aborted) return
+      failure = error instanceof Error ? error : new Error(String(error))
+      controller.abort(failure)
+      stop()
+    })
     const model = resolveModel(options.model, options.variant)
-      ?? (options.variant ? await client.model.default({ location: { directory: options.directory } }).then((result) => {
+      ?? (options.variant ? await client.model.default({ location: { directory: options.directory } }, { signal }).then((result) => {
         if (!result.data) throw new Error("Cannot select a variant before selecting a model")
         return { providerID: result.data.providerID, id: result.data.id, variant: options.variant }
       }) : undefined)
@@ -222,44 +276,21 @@ export async function run(client: Client, options: RunOptions) {
       agent: options.agent,
       model,
       title: options.title,
-    }, { signal: options.signal })
+    }, { signal })
     rootID = session.id
     sessions.set(rootID, { label: "main" })
-    if (options.signal?.aborted) stop()
+    if (signal.aborted) stop()
     checkCancelled()
 
-    const prepared = await Promise.all((options.files ?? []).map(async (file) => {
-      checkCancelled()
-      const info = await stat(file).catch(() => { throw new Error(`File not found: ${file}`) })
-      if (!info.isFile()) throw new Error(`Not a regular file: ${file}`)
-      if (info.size > 10 * 1024 * 1024) throw new Error(`File larger than 10 MiB: ${file}`)
-      const bytes = await readFile(file)
-      const mime = new Map([
-        [".pdf", "application/pdf"], [".png", "image/png"], [".jpg", "image/jpeg"],
-        [".jpeg", "image/jpeg"], [".gif", "image/gif"], [".webp", "image/webp"],
-        [".svg", "image/svg+xml"], [".avif", "image/avif"], [".bmp", "image/bmp"],
-      ]).get(extname(file).toLowerCase()) ?? "text/plain"
-      if (mime.startsWith("image/") || mime === "application/pdf") {
-        return { attachment: { uri: `data:${mime};base64,${bytes.toString("base64")}`, name: basename(file) } }
-      }
-      try {
-        const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
-        if (bytes.includes(0)) throw new Error("binary")
-        return { text: `<file name="${basename(file)}">\n${text}\n</file>` }
-      } catch {
-        throw new Error(`Unsupported binary file: ${file}`)
-      }
-    }))
-    const prompt = [options.prompt.trim(), ...prepared.flatMap((item) => item.text ? [item.text] : [])].join("\n\n")
-    const files = prepared.flatMap((item) => item.attachment ? [item.attachment] : [])
+    const { text: prompt, files } = await preparePrompt(options.prompt, options.files, signal)
     checkCancelled()
     const slash = /^\/([\w.-]+)(?:\s+([\s\S]*))?$/.exec(prompt)
     if (slash) {
       if (options.skills?.length) throw new Error("--skill cannot be used with slash commands")
-      await client.session.command({ sessionID: rootID, name: slash[1]!, text: slash[2] ?? "", files: files.length ? files : undefined }, { signal: options.signal })
+      await client.session.command({ sessionID: rootID, name: slash[1]!, text: slash[2] ?? "", files: files.length ? files : undefined }, { signal })
     } else {
       const mentions = [...prompt.matchAll(/(^|\s)@(?:skill:)?([\w.-]+)/g)]
-      const available = mentions.length ? await client.skill.list({ location: { directory: options.directory } }) : undefined
+      const available = mentions.length ? await client.skill.list({ location: { directory: options.directory } }, { signal }) : undefined
       const names = new Set(available?.data.map((skill) => skill.id) ?? [])
       const skills = [...new Set(options.skills ?? [])].map((id) => ({ id }))
       skills.push(...mentions
@@ -270,11 +301,22 @@ export async function run(client: Client, options: RunOptions) {
           mention: { start: match.index + match[1]!.length, end: match.index + match[0]!.length, text: match[0]!.trim() },
         })))
       attachedSkills.set(rootID, [...new Set(skills.map((skill) => skill.id))])
-      await client.session.prompt({ sessionID: rootID, text: prompt, files: files.length ? files : undefined, skills }, { signal: options.signal })
+      await client.session.prompt({ sessionID: rootID, text: prompt, files: files.length ? files : undefined, skills }, { signal })
     }
 
     checkCancelled()
-    await client.session.wait({ sessionID: rootID }, { signal: options.signal })
+    // Reconcile ephemeral blockers that may have arrived during prompt admission.
+    const [permissions, forms, globals] = await Promise.all([
+      client.permission.list({ sessionID: rootID }, { signal }),
+      client.session.form.list({ sessionID: rootID }, { signal }),
+      client.form.list({ location: { directory: options.directory } }, { signal }),
+    ])
+    await Promise.all([
+      ...permissions.map(replyPermission),
+      ...forms.map(cancelForm),
+      ...(globals.location.directory === options.directory ? globals.data.filter((form) => form.sessionID === "global").map(cancelForm) : []),
+    ])
+    await client.session.wait({ sessionID: rootID }, { signal })
     checkCancelled()
     await drainFinishes()
 
@@ -288,12 +330,12 @@ export async function run(client: Client, options: RunOptions) {
     }
     for (const id of pending.slice(1)) {
       checkCancelled()
-      await client.session.wait({ sessionID: id }, { signal: options.signal })
+      await client.session.wait({ sessionID: id }, { signal })
     }
     for (const id of pending) {
       checkCancelled()
       await replay(id)
-      const result = await client.session.get({ sessionID: id }, { signal: options.signal })
+      const result = await client.session.get({ sessionID: id }, { signal })
       if (result.outcome === "failed" || result.outcome === "interrupted")
         failure ??= new Error(`Session ${id} ${result.outcome}`)
     }
@@ -306,6 +348,7 @@ export async function run(client: Client, options: RunOptions) {
     controller.abort()
     void events.return?.(undefined).catch(() => {})
     await consume
+    await Promise.allSettled(finishing)
     await interrupting
   }
 }

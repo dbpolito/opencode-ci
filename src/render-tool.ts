@@ -23,7 +23,9 @@ export function renderTool(tool: Tool) {
     const local = relative(tool.directory, full)
     return local === "" ? "." : local !== ".." && !local.startsWith(`..${sep}`) && !isAbsolute(local) ? local : full
   })() : ""
-  const output = tool.content?.find((item) => item.type === "text")?.text?.trim() ?? ""
+  const output = (name === "shell"
+    ? tool.content?.find((item) => item.type === "text")?.text ?? ""
+    : tool.content?.flatMap((item) => item.type === "text" && item.text ? [item.text] : []).join("\n") ?? "").trim()
   const count = (value: unknown, label: string) => typeof value === "number" ? `${value} ${label}${value === 1 ? "" : "es"}` : ""
   const summary = (omit: string[]) => {
     const values = Object.entries(input).filter(([key, value]) => !omit.includes(key) && ["string", "number", "boolean"].includes(typeof value))
@@ -55,7 +57,7 @@ export function renderTool(tool: Tool) {
     if (name === "webfetch") return { icon: "%", title: ["WebFetch", text(input.url)].filter(Boolean).join(" ") }
     if (name === "websearch") {
       const provider = text(tool.metadata?.provider)
-      const title = provider ? `Web Search via ${provider[0]!.toUpperCase()}${provider.slice(1)}` : "Web Search"
+      const title = provider ? `Web Search via ${provider === "opencode" ? "OpenCode" : provider[0]!.toUpperCase() + provider.slice(1)}` : "Web Search"
       return { icon: "◈", title: text(input.query) ? `${title} "${text(input.query)}"` : title }
     }
     if (name === "patch") {
@@ -78,9 +80,10 @@ export function renderTool(tool: Tool) {
     return { icon: "⚙", title: `${name} ${Object.keys(input).length ? JSON.stringify(input) : "Unknown"}` }
   })()
 
-  const title = `${tool.error ? "✗" : label.icon} ${label.title}${tool.error ? " failed" : ""}`
-  const description = "description" in label && label.description && !tool.error
+  const title = `${label.icon} ${label.title}`
+  const description = "description" in label && label.description
     ? ` ${tool.color ? `\x1b[90m${label.description}\x1b[0m` : label.description}` : ""
-  const block = "block" in label && label.block && !tool.error
-  return `${block ? "\n" : ""}${title}${description}\n${block && "body" in label && label.body?.trim() ? `${label.body.trim()}\n` : ""}${block ? "\n" : ""}${tool.error ? `${tool.error}\n` : ""}`
+  const block = "block" in label && label.block
+  const rendered = `${block ? "\n" : ""}${title}${description}\n${block && "body" in label && label.body?.trim() ? `${label.body.trim()}\n` : ""}${block ? "\n" : ""}`
+  return tool.error ? `${output ? rendered : ""}✗ ${label.title} failed\n${tool.error}\n` : rendered
 }

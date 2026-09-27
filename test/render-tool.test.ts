@@ -53,3 +53,17 @@ test("renders provider, LSP, aliases, and edit metadata like opencode run", () =
   expect(renderTool({ directory, name: "batch", input: { tool_calls: [{}, {}] }, content: [{ type: "text", text: "done" }] }))
     .toBe("\n# Batch 2 tools\ndone\n\n")
 })
+
+test("preserves failure diagnostics before the failure label", () => {
+  const result = renderTool({ directory, name: "shell", input: { command: "bun test" },
+    content: [{ type: "text", text: "Assertion failed at test.ts:42" }, { type: "text", text: "model-only status" }], error: "Exit code 1" })
+  expect(result).toBe("\n$ bun test\nAssertion failed at test.ts:42\n\n✗ bun test failed\nExit code 1\n")
+})
+
+test("joins all non-shell text blocks and uses the upstream provider name", () => {
+  expect(renderTool({ directory, name: "write", input: { path: "a.ts" }, content: [
+    { type: "text", text: "first" }, { type: "image" }, { type: "text", text: "second" },
+  ] })).toContain("first\nsecond")
+  expect(renderTool({ directory, name: "websearch", input: { query: "docs" }, metadata: { provider: "opencode" } }))
+    .toBe('◈ Web Search via OpenCode "docs"\n')
+})

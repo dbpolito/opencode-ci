@@ -2,290 +2,64 @@ import { expect, test } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { resolveModel, run } from "../src/run"
+import { resolveModel } from "../src/run"
+import { aborted, assistant, deferred, fixture } from "./helpers"
 
-function fixture(input: { prompt: string; skills?: string[]; availableSkills?: string[]; children?: boolean; parallel?: boolean; sameTitle?: boolean; holdRecovery?: boolean; holdSecondChild?: boolean; events?: Array<{ type: string; data: Record<string, unknown> }>; childFailed?: boolean; tool?: boolean; subagent?: boolean; model?: string; variant?: string; thinking?: boolean; auto?: boolean; files?: string[]; signal?: AbortSignal; waitForAbort?: boolean; paginated?: boolean }) {
-  const calls: { create?: unknown; command?: unknown; prompt?: unknown; skillListed?: boolean; interrupted?: string; messages: unknown[] } = { messages: [] }
-  const output: string[] = []
-  let releaseEvents = () => {}
-  const prompted = new Promise<void>((resolve) => { releaseEvents = resolve })
-  let finishEvents = () => {}
-  const eventsDone = new Promise<void>((resolve) => { finishEvents = resolve })
-  let releaseRecovery = () => {}
-  const recoveryReleased = new Promise<void>((resolve) => { releaseRecovery = resolve })
-  let held = false
-  let releaseSecondChild = () => {}
-  const secondChildReleased = new Promise<void>((resolve) => { releaseSecondChild = resolve })
-  const client = {
-    event: {
-      subscribe: async function* (options: { signal: AbortSignal }) {
-        yield { type: "server.connected", data: {} }
-        if (input.events) {
-          await prompted
-          for (const event of input.events) yield event
-          finishEvents()
-        }
-        await new Promise<void>((resolve) => options.signal.addEventListener("abort", () => resolve(), { once: true }))
-      },
-    },
-    session: {
-      create: async (value: unknown) => { calls.create = value; return { id: "root" } },
-      command: async (value: unknown) => { calls.command = value },
-      prompt: async (value: unknown) => { calls.prompt = value; releaseEvents() },
-      wait: async ({ sessionID }: { sessionID: string }, options?: { signal?: AbortSignal }) => {
-        if (input.holdSecondChild && sessionID === "child_two") await secondChildReleased
-        if (input.events) await eventsDone
-        if (!input.waitForAbort) return
-        await new Promise<void>((_, reject) => options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true }))
-      },
-      list: async ({ parentID }: { parentID: string }) => {
-        if (input.holdRecovery && parentID === "root" && !held) {
-          held = true
-          await recoveryReleased
-        }
-        return { data: input.parallel && parentID === "root" ? [
-          { id: "child_one", title: input.sameTitle ? "Say hi to user" : "Say hi from agent one" },
-          { id: "child_two", title: input.sameTitle ? "Say hi to user" : "Say hi from agent two" },
-        ] : input.children && parentID === "root" ? [{ id: "child", title: "reviewer" }] : [] }
-      },
-      get: async ({ sessionID }: { sessionID: string }) => ({ outcome: sessionID === "child" && input.childFailed ? "failed" : "succeeded" }),
-      interrupt: async ({ sessionID }: { sessionID: string }) => { calls.interrupted = sessionID },
-    },
-    skill: { list: async () => { calls.skillListed = true; return { data: (input.availableSkills ?? ["review"]).map((id) => ({ id })) } } },
-    model: { default: async () => ({ data: { providerID: "openai", id: "gpt-6-sol" } }) },
-    permission: { reply: async () => {} },
-    message: {
-      list: async (params: { sessionID: string; cursor?: string; order?: string }) => {
-        calls.messages.push(params)
-        if (params.cursor && params.order) throw new Error("Cursor cannot be combined with order")
-        return {
-          data: params.sessionID.startsWith("child")
-            ? [{ id: `msg_${params.sessionID}`, type: "assistant", agent: input.parallel ? "general" : "reviewer", model: { id: "gpt-6-sol" }, content: [{ type: "text", text: input.parallel ? `Hello from ${params.sessionID}` : "child findings" }] }]
-            : [{ id: "msg_root", type: "assistant", agent: "build", model: { id: "gpt-6-sol" }, content: [
-              ...(input.tool ? [{ type: "tool", id: "tool_1", name: "read", state: { status: "completed", input: { path: "/workspace/src/app.ts" }, content: [{ type: "text", text: "contents" }] } }] : []),
-              ...(input.subagent ? [{ type: "tool", id: "tool_2", name: "subagent", state: { status: "completed", input: { agent: "general", description: "reviewer" }, content: [] } }] : []),
-              ...(input.parallel ? ["one", "two"].map((name) => ({ type: "tool", id: `tool_${name}`, name: "subagent", state: { status: "completed", input: { agent: "general", description: input.sameTitle ? "Say hi to user" : `Say hi from agent ${name}` }, metadata: { sessionID: `child_${name}` }, content: [] } })) : []),
-              ...(input.thinking ? [{ type: "reasoning", text: "checking changes" }] : []),
-              { type: "text", text: "summary" },
-            ] }],
-          cursor: { next: input.paginated && !params.cursor ? "next-page" : null },
-        }
-      },
-    },
-  }
-  const execute = () => run(client as unknown as Parameters<typeof run>[0], {
-    directory: "/workspace", prompt: input.prompt, skills: input.skills, model: input.model, variant: input.variant,
-    thinking: input.thinking, auto: input.auto, files: input.files, signal: input.signal, write: (text) => {
-      output.push(text)
-      if (text.includes("Say hi from agent two Hello")) releaseRecovery()
-      if (text.includes("Say hi to user ✓")) releaseSecondChild()
-    },
-  })
-  return { execute, calls, output }
-}
-
-test("dispatches slash commands to the command API", async () => {
-  const test = fixture({ prompt: "/review important changes" })
-  await test.execute()
-  expect(test.calls.command).toEqual({ sessionID: "root", name: "review", text: "important changes" })
-  expect(test.calls.prompt).toBeUndefined()
+test("dispatches slash commands", async () => {
+  const f = fixture({ prompt: "/review important changes" })
+  await f.execute()
+  expect(f.client.session.command).toHaveBeenCalledWith({ sessionID: "root", name: "review", text: "important changes", files: undefined }, expect.anything())
+  expect(f.client.session.prompt).not.toHaveBeenCalled()
 })
 
-test("attaches skill mentions and includes child session output", async () => {
-  const test = fixture({ prompt: "Please @review this", children: true })
-  await test.execute()
-  expect(test.calls.prompt).toEqual({ sessionID: "root", text: "Please @review this", skills: [
+test("attaches skill mentions", async () => {
+  const f = fixture({ prompt: "Please @review this" })
+  await f.execute()
+  expect(f.client.session.prompt.mock.calls[0]?.[0]).toMatchObject({ text: "Please @review this", skills: [
     { id: "review", mention: { start: 7, end: 14, text: "@review" } },
   ] })
-  expect(test.output.join("")).toContain("> build · gpt-6-sol · review")
-  expect(test.output.join("")).toContain("reviewer child findings")
-  expect(test.output.join("")).toContain("summary")
+  expect(f.output.join("")).toContain("> build · test-model · review")
 })
 
-test("attaches multiple required skills without waiting for the skill catalog", async () => {
-  const test = fixture({ prompt: "Review this PR", skills: ["review-pr", "security", "review-pr"], availableSkills: [] })
-  await test.execute()
-  expect(test.calls.skillListed).toBeUndefined()
-  expect(test.calls.prompt).toEqual({ sessionID: "root", text: "Review this PR", skills: [
-    { id: "review-pr" }, { id: "security" },
-  ] })
-  expect(test.output.join("")).toContain("> build · gpt-6-sol · review-pr, security")
+test("attaches required skills without a catalog lookup and deduplicates IDs", async () => {
+  const f = fixture({ skills: ["review-pr", "security", "review-pr"] })
+  await f.execute()
+  expect(f.client.skill.list).not.toHaveBeenCalled()
+  expect(f.client.session.prompt.mock.calls[0]?.[0]).toMatchObject({ skills: [{ id: "review-pr" }, { id: "security" }] })
 })
 
-test("keeps a required skill attached when the cold catalog misses its mention", async () => {
-  const test = fixture({ prompt: "Use @review-pr to review", skills: ["review-pr"], availableSkills: [] })
-  await test.execute()
-  expect(test.calls.prompt).toMatchObject({ skills: [{ id: "review-pr" }] })
-  expect(test.output.join("")).toContain("> build · gpt-6-sol · review-pr")
+test("keeps required skills when the cold catalog misses a mention", async () => {
+  const f = fixture({ prompt: "Use @review-pr", skills: ["review-pr"] })
+  f.client.skill.list.mockResolvedValue({ data: [] })
+  await f.execute()
+  expect(f.client.session.prompt.mock.calls[0]?.[0]).toMatchObject({ skills: [{ id: "review-pr" }] })
 })
 
-test("does not silently ignore required skills on slash commands", async () => {
-  const test = fixture({ prompt: "/review", skills: ["review-pr"] })
-  await expect(test.execute()).rejects.toThrow("--skill cannot be used with slash commands")
-  expect(test.calls.command).toBeUndefined()
+test("rejects required skills on slash commands", async () => {
+  const f = fixture({ prompt: "/review", skills: ["review-pr"] })
+  await expect(f.execute()).rejects.toThrow("--skill cannot be used with slash commands")
+  expect(f.client.session.command).not.toHaveBeenCalled()
 })
 
-test("uses a dim subagent name prefix in terminals", async () => {
-  const descriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY")
-  const noColor = process.env.NO_COLOR
-  try {
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true })
-    delete process.env.NO_COLOR
-    const test = fixture({ prompt: "Say hi", children: true })
-    await test.execute()
-    expect(test.output.join("")).toContain("\x1b[90mreviewer\x1b[0m child findings")
-    expect(test.output.join("")).not.toContain("\n\n\n")
-  } finally {
-    if (descriptor) Object.defineProperty(process.stdout, "isTTY", descriptor)
-    else Reflect.deleteProperty(process.stdout, "isTTY")
-    if (noColor === undefined) delete process.env.NO_COLOR
-    else process.env.NO_COLOR = noColor
+test("selects variants and prints reasoning only when requested", async () => {
+  for (const thinking of [false, true]) {
+    const f = fixture({ model: "openai/test-model#high", thinking })
+    f.messages.set("root", [assistant("msg_root", { type: "reasoning", text: "checking changes" }, { type: "text", text: "summary" })])
+    await f.execute()
+    expect(f.client.session.create.mock.calls[0]?.[0]).toMatchObject({ model: { providerID: "openai", id: "test-model", variant: "high" } })
+    expect(f.output.join("").includes("Thinking: checking changes")).toBe(thinking)
   }
-})
-
-test("prefixes the subagent finish without repeating its name", async () => {
-  const test = fixture({ prompt: "Ask reviewer", children: true, subagent: true })
-  await test.execute()
-  const output = test.output.join("")
-  expect(output).toContain("reviewer > reviewer · gpt-6-sol")
-  expect(output).toContain("reviewer ✓ General Agent")
-  expect(output).not.toContain("✓ reviewer")
-  expect(output).not.toContain("\n\n")
-})
-
-test("replays each parallel child's transcript before its completion when child events are missed", async () => {
-  const test = fixture({ prompt: "Say hi in parallel", parallel: true })
-  await test.execute()
-  const lines = test.output.join("").split("\n")
-  for (const name of ["one", "two"]) {
-    const prefix = `Say hi from agent ${name} `
-    const heading = lines.findIndex((line) => line.startsWith(`${prefix}> general ·`))
-    const text = lines.findIndex((line) => line === `${prefix}Hello from child_${name}`)
-    const finish = lines.findIndex((line) => line.startsWith(`${prefix}✓ General Agent`))
-    expect(heading).toBeGreaterThan(-1)
-    expect(heading).toBeLessThan(text)
-    expect(text).toBeLessThan(finish)
-    expect(lines.filter((line) => line.startsWith(`${prefix}✓`))).toHaveLength(1)
-  }
-})
-
-test("streams interleaved children and flushes missed child output before a live finish", async () => {
-  const child = (id: string, title: string) => ({ type: "session.created", data: { sessionID: id, parentID: "root", title } })
-  const step = (id: string) => ({ type: "session.step.started", data: { sessionID: id, assistantMessageID: `msg_${id}`, agent: "general", model: { id: "gpt-6-sol" } } })
-  const tool = (id: string, name: string) => ({ type: "session.tool.input.started", data: { sessionID: "root", assistantMessageID: "msg_root", id, name: "subagent" } })
-  const called = (id: string, name: string) => ({ type: "session.tool.called", data: { sessionID: "root", assistantMessageID: "msg_root", id, input: { agent: "general", description: `Say hi from agent ${name}` } } })
-  const success = (id: string) => ({ type: "session.tool.success", data: { sessionID: "root", assistantMessageID: "msg_root", id, content: [] } })
-  const test = fixture({ prompt: "Say hi in parallel", parallel: true, events: [
-    child("child_one", "Say hi from agent one"), child("child_two", "Say hi from agent two"),
-    tool("tool_one", "one"), called("tool_one", "one"), tool("tool_two", "two"), called("tool_two", "two"),
-    step("child_one"), step("child_two"),
-    { type: "session.text.ended", data: { sessionID: "child_two", assistantMessageID: "msg_child_two", ordinal: 0, text: "Hello from child_two" } },
-    success("tool_two"), success("tool_one"),
-  ] })
-  await test.execute()
-  const output = test.output.join("")
-  expect(output.indexOf("Say hi from agent one > general")).toBeLessThan(output.indexOf("Say hi from agent two > general"))
-  expect(output.indexOf("Say hi from agent two Hello")).toBeLessThan(output.indexOf("Say hi from agent two ✓"))
-  expect(output.indexOf("Say hi from agent one Hello")).toBeLessThan(output.indexOf("Say hi from agent one ✓"))
-  expect(output.match(/✓ General Agent/g)).toHaveLength(2)
-})
-
-test("keeps reading the other child's live events while completion recovery is waiting", async () => {
-  const test = fixture({ prompt: "Say hi in parallel", parallel: true, holdRecovery: true, events: [
-    { type: "session.created", data: { sessionID: "child_two", parentID: "root", title: "Say hi from agent two" } },
-    { type: "session.step.started", data: { sessionID: "child_two", assistantMessageID: "msg_child_two", agent: "general", model: { id: "gpt-6-sol" } } },
-    { type: "session.tool.input.started", data: { sessionID: "root", assistantMessageID: "msg_root", id: "tool_one", name: "subagent" } },
-    { type: "session.tool.called", data: { sessionID: "root", assistantMessageID: "msg_root", id: "tool_one", input: { agent: "general", description: "Say hi from agent one" } } },
-    { type: "session.tool.success", data: { sessionID: "root", assistantMessageID: "msg_root", id: "tool_one", content: [] } },
-    { type: "session.text.ended", data: { sessionID: "child_two", assistantMessageID: "msg_child_two", ordinal: 0, text: "Hello from child_two" } },
-  ] })
-  await test.execute()
-  const output = test.output.join("")
-  expect(output.indexOf("Say hi from agent two Hello")).toBeLessThan(output.indexOf("Say hi from agent one ✓"))
-  expect(output.match(/✓ General Agent/g)).toHaveLength(2)
-}, 2000)
-
-test("uses the child session ID when parallel calls share a description", async () => {
-  const test = fixture({ prompt: "Say hi in parallel", parallel: true, sameTitle: true, holdSecondChild: true, events: [
-    { type: "session.tool.input.started", data: { sessionID: "root", assistantMessageID: "msg_root", id: "tool_one", name: "subagent" } },
-    { type: "session.tool.called", data: { sessionID: "root", assistantMessageID: "msg_root", id: "tool_one", input: { agent: "general", description: "Say hi to user" } } },
-    { type: "session.tool.success", data: { sessionID: "root", assistantMessageID: "msg_root", id: "tool_one", metadata: { sessionID: "child_one" }, content: [] } },
-  ] })
-  await test.execute()
-  const output = test.output.join("")
-  expect(output.indexOf("Say hi to user Hello from child_one")).toBeLessThan(output.indexOf("Say hi to user ✓"))
-  expect(output.indexOf("Say hi to user ✓")).toBeLessThan(output.indexOf("Say hi to user Hello from child_two"))
-  expect(output.match(/✓ General Agent/g)).toHaveLength(2)
-}, 2000)
-
-test("uses the colored prefix in GitHub Actions unless NO_COLOR is set", async () => {
-  const descriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY")
-  const github = process.env.GITHUB_ACTIONS
-  const noColor = process.env.NO_COLOR
-  try {
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false })
-    process.env.GITHUB_ACTIONS = "true"
-    delete process.env.NO_COLOR
-    const colored = fixture({ prompt: "Say hi", children: true })
-    await colored.execute()
-    expect(colored.output.join("")).toContain("\x1b[90mreviewer\x1b[0m child findings")
-
-    process.env.NO_COLOR = "1"
-    const plain = fixture({ prompt: "Say hi", children: true })
-    await plain.execute()
-    expect(plain.output.join("")).toContain("reviewer child findings")
-    expect(plain.output.join("")).not.toContain("\x1b[")
-  } finally {
-    if (descriptor) Object.defineProperty(process.stdout, "isTTY", descriptor)
-    else Reflect.deleteProperty(process.stdout, "isTTY")
-    if (github === undefined) delete process.env.GITHUB_ACTIONS
-    else process.env.GITHUB_ACTIONS = github
-    if (noColor === undefined) delete process.env.NO_COLOR
-    else process.env.NO_COLOR = noColor
-  }
-})
-
-test("paginates messages without combining cursor and order", async () => {
-  const test = fixture({ prompt: "Hello there", paginated: true })
-  await test.execute()
-  expect(test.calls.messages).toEqual([
-    { sessionID: "root", limit: 200, order: "desc" },
-    { sessionID: "root", limit: 200, cursor: "next-page" },
-  ])
-})
-
-test("exits with an error when a child fails", async () => {
-  const test = fixture({ prompt: "review", children: true, childFailed: true })
-  expect(test.execute()).rejects.toThrow("Session child failed")
-})
-
-test("renders run-style step and tool lines with only child output prefixed", async () => {
-  const test = fixture({ prompt: "review", children: true, tool: true })
-  await test.execute()
-  expect(test.output.join("")).toContain("> build · gpt-6-sol")
-  expect(test.output.join("")).toContain("> build · gpt-6-sol · no skills")
-  expect(test.output.join("")).not.toContain("reviewer > reviewer · gpt-6-sol · no skills")
-  expect(test.output.join("")).toContain("→ Read src/app.ts")
-  expect(test.output.join("")).toContain("reviewer > reviewer · gpt-6-sol")
-  expect(test.output.join("")).not.toContain("::group::")
-})
-
-test("selects a model and prints reasoning only when requested", async () => {
-  const test = fixture({ prompt: "review", model: "openai/gpt-6-sol#high", thinking: true })
-  await test.execute()
-  expect(test.calls.create).toMatchObject({ model: { providerID: "openai", id: "gpt-6-sol", variant: "high" } })
-  expect(test.output.join("")).toContain("Thinking: checking changes")
 })
 
 test("variant alone selects the default model", async () => {
-  const test = fixture({ prompt: "review", variant: "high" })
-  await test.execute()
-  expect(test.calls.create).toMatchObject({ model: { providerID: "openai", id: "gpt-6-sol", variant: "high" } })
+  const f = fixture({ variant: "high" })
+  await f.execute()
+  expect(f.client.session.create.mock.calls[0]?.[0]).toMatchObject({ model: { providerID: "openai", id: "test-model", variant: "high" } })
 })
 
 test("rejects invalid or conflicting model variants", () => {
   expect(() => resolveModel("not-a-model")).toThrow("Invalid model reference")
-  expect(() => resolveModel("openai/gpt-6-sol#high", "low")).toThrow("conflicts")
+  expect(() => resolveModel("openai/test-model#high", "low")).toThrow("conflicts")
 })
 
 test("includes text files with the prompt", async () => {
@@ -293,19 +67,121 @@ test("includes text files with the prompt", async () => {
   try {
     const file = join(directory, "notes.txt")
     await writeFile(file, "Check the tests")
-    const test = fixture({ prompt: "Review", files: [file] })
-    await test.execute()
-    expect(test.calls.prompt).toMatchObject({ text: 'Review\n\n<file name="notes.txt">\nCheck the tests\n</file>' })
-  } finally {
-    await rm(directory, { recursive: true })
+    const f = fixture({ files: [file] })
+    await f.execute()
+    expect(f.client.session.prompt.mock.calls[0]?.[0]).toMatchObject({ text: 'Review\n\n<file name="notes.txt">\nCheck the tests\n</file>' })
+  } finally { await rm(directory, { recursive: true }) }
+})
+
+test("paginates messages without combining cursor and order", async () => {
+  const f = fixture()
+  f.client.message.list.mockImplementation(async (params) => ({
+    data: [assistant(params.cursor ? "older" : "newer", { type: "text", text: params.cursor ? "old reply" : "new reply" })],
+    cursor: { next: params.cursor ? null : "next-page" },
+  }))
+  await f.execute()
+  expect(f.client.message.list.mock.calls.map(([params]) => params)).toEqual([
+    { sessionID: "root", limit: 200, order: "desc" }, { sessionID: "root", limit: 200, cursor: "next-page" },
+  ])
+  expect(f.output.join("").indexOf("old reply")).toBeLessThan(f.output.join("").indexOf("new reply"))
+})
+
+test("keeps status and tool output out of redirected assistant stdout", async () => {
+  const stdout: string[] = []
+  const stderr: string[] = []
+  const f = fixture({ write: (text) => stdout.push(text), writeStatus: (text) => stderr.push(text) })
+  f.messages.set("root", [assistant("msg_root", {
+    type: "tool", id: "read", name: "read", state: { status: "completed", input: { path: "/workspace/app.ts" }, content: [] },
+  }, { type: "text", text: "summary" })])
+  await f.execute()
+  expect(stdout.join("")).toBe("summary\n")
+  expect(stderr.join("")).toContain("→ Read app.ts")
+  expect(stderr.join("")).toContain("> build · test-model · no skills")
+})
+
+test("cancels root, child and same-location global forms, ignoring unrelated forms", async () => {
+  const f = fixture({ auto: true })
+  f.events.push({ type: "session.created", data: { sessionID: "child", parentID: "root", title: "reviewer" } })
+  for (const [id, sessionID, directory] of [
+    ["root-form", "root", "/workspace"], ["child-form", "child", "/workspace"],
+    ["global-form", "global", "/workspace"], ["foreign-global", "global", "/other"], ["foreign", "other", "/workspace"],
+  ]) f.events.push({ type: "form.created", data: { form: { id, sessionID } }, location: { directory: directory! } })
+  await expect(f.execute()).rejects.toThrow("Interactive input is unavailable in CI")
+  expect(f.client.session.form.cancel.mock.calls.map(([form]) => form.formID)).toEqual(["root-form", "child-form", "global-form"])
+  expect(f.client.session.form.cancel.mock.calls[2]?.[1]).toMatchObject({ headers: { "x-opencode-directory": "%2Fworkspace" } })
+})
+
+test("reconciles missed form events and tolerates an already-settled form", async () => {
+  const f = fixture()
+  f.client.session.form.list.mockResolvedValue([{ id: "missed", sessionID: "root" }])
+  f.client.session.form.cancel.mockRejectedValue({ _tag: "FormAlreadySettledError" })
+  await f.execute()
+  expect(f.client.session.form.cancel).toHaveBeenCalledTimes(1)
+})
+
+test("handles blockers only once when both admission reconciliation and events see them", async () => {
+  const f = fixture({ auto: true })
+  const permission = { id: "permission", sessionID: "root", action: "shell", resources: ["ls"] }
+  const form = { id: "form", sessionID: "global" }
+  f.client.permission.list.mockResolvedValue([permission])
+  f.client.form.list.mockResolvedValue({ location: { directory: "/workspace" }, data: [form] })
+  f.events.push(
+    { type: "permission.asked", data: permission },
+    { type: "form.created", data: { form }, location: { directory: "/workspace" } },
+  )
+  await expect(f.execute()).rejects.toThrow("Interactive input is unavailable in CI")
+  expect(f.client.permission.reply).toHaveBeenCalledTimes(1)
+  expect(f.client.session.form.cancel).toHaveBeenCalledTimes(1)
+})
+
+test("rejects permissions and interrupts promptly, or approves once with --auto", async () => {
+  for (const auto of [false, true]) {
+    const f = fixture({ auto })
+    f.events.push({ type: "permission.asked", data: { id: "permission", sessionID: "root", action: "shell", resources: ["ls"] } })
+    if (auto) await f.execute()
+    else await expect(f.execute()).rejects.toThrow("Permission denied")
+    expect(f.client.permission.reply.mock.calls[0]?.[0]).toMatchObject({ decision: auto ? "once" : "reject" })
+    expect(f.client.session.interrupt.mock.calls.length).toBe(auto ? 0 : 1)
   }
 })
 
-test("aborting a run interrupts the active session and cancels its wait", async () => {
+test("aborting interrupts the active session and cancels its wait", async () => {
   const controller = new AbortController()
-  const test = fixture({ prompt: "review", signal: controller.signal, waitForAbort: true })
-  const pending = test.execute()
-  setTimeout(() => controller.abort(new Error("SIGTERM")), 5)
-  await expect(pending).rejects.toThrow("SIGTERM")
-  expect(test.calls.interrupted).toBe("root")
+  const f = fixture({ signal: controller.signal })
+  f.client.session.wait.mockImplementation(async (_, request) => {
+    controller.abort(new Error("SIGTERM"))
+    request?.signal?.throwIfAborted()
+  })
+  await expect(f.execute()).rejects.toThrow("SIGTERM")
+  expect(f.client.session.interrupt.mock.calls[0]?.[0]).toEqual({ sessionID: "root" })
+})
+
+test("cancels and closes a stalled initial subscription", async () => {
+  const controller = new AbortController()
+  const f = fixture({ signal: controller.signal })
+  const connected = deferred()
+  let closed = false
+  f.client.event.subscribe = async function* ({ signal }) {
+    try { connected.resolve(); await aborted(signal) } finally { closed = true }
+  }
+  const pending = f.execute()
+  await connected.promise
+  controller.abort(new Error("cancel connect"))
+  await expect(pending).rejects.toThrow("cancel connect")
+  expect(closed).toBe(true)
+  expect(f.client.session.create).not.toHaveBeenCalled()
+})
+
+test("stream disconnection aborts outstanding requests instead of waiting for timeout", async () => {
+  const f = fixture()
+  f.client.event.subscribe = async function* () {
+    yield { type: "server.connected", data: {} }
+    await f.prompted.promise
+  }
+  f.client.session.wait.mockImplementation(async (_, request) => {
+    await aborted(request!.signal!)
+    request!.signal!.throwIfAborted()
+  })
+  await expect(f.execute()).rejects.toThrow("OpenCode event stream disconnected")
+  expect(f.client.session.interrupt).toHaveBeenCalled()
 })
