@@ -2,8 +2,8 @@
 
 - Subagent output: see child agents' steps and replies in the log.
 - `/commands`: run a project command from the prompt.
-- `@skills`: attach a project skill by mentioning it.
-- Account auth (`~/opencode-ci.auth.json`): an advanced option for trusted private CI when an API key will not do.
+- `@skills`: the intended skill-mention syntax (currently unreliable in CI; use `--skill` for required skills).
+- Account auth (`~/opencode-ci.auth.json`): an alternative when you can't use an API key.
 
 ## Subagent output
 
@@ -25,19 +25,31 @@ Run a command defined in your OpenCode project:
 npx opencode-ci run '/review the changed tests'
 ```
 
-## `@skill`
+## `@skills`
 
-Mention a project skill to attach it. `bunx` works too:
+The intended interface is to mention an installed skill in the prompt. For example, install [`review-pr`](https://github.com/dbpolito/skills/tree/main/skills/review-pr) from [dbpolito/skills](https://github.com/dbpolito/skills) and run (`bunx` works too):
 
 ```sh
-bunx opencode-ci run 'Use @review to inspect the changes'
+npx skills add dbpolito/skills --skill review-pr -g -a opencode
+bunx opencode-ci run --auto 'Use @review-pr to review and publish findings for PR #123 in owner/repo'
 ```
 
-You can also write `@skill:review`. The command and skill examples require a project definition named `review`.
+**Do not rely on this syntax for CI yet.** OpenCode's skill catalog can return no skills before plugin activation, so `opencode-ci` may silently leave `@review-pr` as plain text. The upstream fix is in [OpenCode PR #50430](https://github.com/anomalyco/opencode/pull/50430); until it is available in the SDK, use `--skill` for required skills. `@skill:review-pr` has the same limitation. The `/review` command example above requires a project command named `review`. The skill requires `git`, authenticated `gh`, `jq`, the PR head checked out, and enough history to find its merge base; publishing requires PR review permissions.
+
+## Required skills in CI
+
+Require the skill instead of relying on a mention. Repeat `--skill` to attach more than one:
+
+```sh
+bunx opencode-ci run --auto --skill=review-pr 'Review and publish findings for PR #123 in owner/repo'
+bunx opencode-ci run --skill=review-pr --skill=security 'Review this PR'
+```
+
+Required skills are attached directly, without a preliminary skill-list lookup. If any is unavailable, OpenCode rejects the prompt instead of running without it. `--skill` cannot be combined with a `/command` prompt; `@` mentions remain best-effort.
 
 ## OAuth credentials (advanced)
 
-Prefer a provider API key for automation; see the [GitHub Actions example](#api-key). Only use account credentials on trusted private infrastructure when you specifically need that account. The client reads `~/opencode-ci.auth.json` when it exists and saves refreshed tokens to the same file:
+Prefer a provider API key for automation; see the [GitHub Actions example](#api-key). For account auth, the client reads `~/opencode-ci.auth.json` and saves refreshed tokens to the same file:
 
 ```sh
 npx opencode-ci run --model openai/gpt-6-luna 'Review this repository'
@@ -49,41 +61,73 @@ See [how to export your login](#use-your-opencode-login-in-ci) and [use it in Gi
 
 ### API key
 
+Set `OPENAI_API_KEY` as a repository secret and `OPENCODE_MODEL` as a repository variable (or use your provider's equivalents). This is the API-key version of the reviewed [PR review workflow in dbpolito/skills](https://github.com/dbpolito/skills/blob/main/examples/opencode-review-pr.yml):
+
 ```yaml
-name: Review with OpenCode
-on: workflow_dispatch
+name: opencode-review-pr
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   review:
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 55
+    concurrency:
+      group: opencode-review-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      REVIEW_LOGIN: github-actions[bot]
+      REVIEW_MODEL: ${{ vars.OPENCODE_MODEL }}
+      REVIEW_AGENT: build
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+
+      - name: Install review skill
+        run: npx --yes skills add dbpolito/skills --skill review-pr -g -a opencode -y
+
       - name: Review
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: npx --yes opencode-ci@0.1.10 run --auto --model openrouter/anthropic/claude-sonnet-4 'Review this repository for correctness and missing tests'
-        timeout-minutes: 45
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          npx --yes opencode-ci@0.1.12 run --auto --thinking \
+            --agent "$REVIEW_AGENT" --model "$REVIEW_MODEL" --timeout 2700 \
+            --title "review-pr $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" \
+            --skill=review-pr \
+            'Review and publish findings for the PR supplied in the environment.'
 ```
 
-Set `OPENROUTER_API_KEY` as a repository secret, or use your provider's model and key. Pin the npm package version for production. GitHub does not pass repository secrets to pull requests from forks.
+The workflow pins `opencode-ci` to a version with `--skill`; update that version deliberately when adopting later releases.
 
-## Use your OpenCode login in trusted private CI
+The [`review-pr` skill](https://github.com/dbpolito/skills/tree/main/skills/review-pr) publishes a GitHub review. To allow the bot to approve PRs, enable that option in the repository's Actions settings.
 
-OpenAI [documents account auth in CI/CD](https://learn.chatgpt.com/docs/auth/ci-cd-auth) for trusted private Codex automation, while recommending API keys for most jobs. OpenCode uses a different credential file, but the same pattern applies: run the client normally and save its refreshed credentials instead of refreshing tokens yourself.
+## Use your OpenCode login in CI
 
-Do not use this example for public/open-source repositories, fork PRs, or jobs that run untrusted code. The workflow must run on trusted infrastructure with access to the account secret. Use a separate credential for CI so local and CI runs do not rotate the same refresh token.
+Prefer an API key when possible. If you use your OpenCode login instead, give CI its own credential so local and CI runs don't rotate the same refresh token.
 
 1. Log in with the OpenCode CLI or desktop app. For ChatGPT Plus/Pro, choose OpenAI's ChatGPT OAuth method.
 2. Export the saved login:
 
    ```sh
-   npx --yes opencode-ci@0.1.10 auth export \
+    npx --yes opencode-ci@0.1.12 auth export \
      --db "$(opencode debug paths db)" \
      --integration openai
    ```
@@ -96,51 +140,69 @@ Do not use this example for public/open-source repositories, fork PRs, or jobs t
    gh secret set OPENCODE_CI_AUTH_JSON < "$HOME/opencode-ci.auth.json"
    ```
 
-   Do not commit or print the file. Delete the local copy when you no longer need it.
+   Do not commit or print the file.
 4. Log out and log in again locally to get a new credential for local use. CI keeps the credential you exported in step 2. Re-export only if you need to reseed CI (for example, after the refresh token is revoked or expires).
 
 ### GitHub Actions with OAuth on ephemeral runners
 
-Ephemeral runners lose their filesystem after each job. Restore the latest credential from a secret, run `opencode-ci`, then save the updated file back. `PAT_TOKEN` needs permission to update repository Actions secrets; `GITHUB_TOKEN` cannot. A GitHub App token works too.
-
-This example runs on non-draft PRs from the same trusted private repository, not forks. Its `opencode-review` group controls review runs; avoid workflow-level cancellation that could interrupt credential write-back.
+Set `OPENCODE_MODEL` as a repository variable and add `PAT_TOKEN` as a secret with permission to update Actions secrets (`GITHUB_TOKEN` cannot). This follows the auth variant of the [PR review workflow in dbpolito/skills](https://github.com/dbpolito/skills/blob/main/examples/opencode-review-pr.yml), with a shared concurrency group for all jobs using this credential:
 
 ```yaml
-name: Review with ChatGPT OAuth
+name: opencode-review-pr
+
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   review:
     if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 55
     concurrency:
-      group: opencode-review-${{ github.event.pull_request.number }}
+      group: opencode-auth
       cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      REVIEW_LOGIN: github-actions[bot]
+      REVIEW_MODEL: ${{ vars.OPENCODE_MODEL }}
+      REVIEW_AGENT: build
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
+
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Load OAuth credentials
+
+      - name: Install review skill
+        run: npx --yes skills add dbpolito/skills --skill review-pr -g -a opencode -y
+
+      - name: Load auth credentials
         id: auth
         env:
           OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
         run: printf '%s' "$OPENCODE_CI_AUTH_JSON" > "$HOME/opencode-ci.auth.json"
+
       - name: Review
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: npx --yes opencode-ci@0.1.10 run --auto --model openai/gpt-6-luna "Review the PR diff ($BASE_SHA...HEAD) for bugs. Do not edit files."
-      - name: Save refreshed OAuth tokens
+        run: |
+          npx --yes opencode-ci@0.1.12 run --auto --thinking \
+            --agent "$REVIEW_AGENT" --model "$REVIEW_MODEL" --timeout 2700 \
+            --title "review-pr $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" \
+            --skill=review-pr \
+            'Review and publish findings for the PR supplied in the environment.'
+
+      - name: Save refreshed auth credentials
         if: always() && steps.auth.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
@@ -151,42 +213,52 @@ jobs:
           fi
 ```
 
-This prints the review to the Actions log; posting a formal GitHub review requires a separate publishing step. Only grant the account secret to PR authors and code you trust.
+Only expose account credentials to code and PR authors you trust.
 
 Each run uses a fresh OpenCode database and updates `~/opencode-ci.auth.json` only when credentials change, including after a failed session if cleanup completes. For another file, use both `--auth-file PATH` and `--auth-output PATH`.
 
 Do not cache, log, or upload the credential file. A failed refresh or interrupted write-back may require a fresh login and reseed.
 
-If real jobs may be idle, run this daily keepalive (09:00 UTC):
+If review jobs may be idle, use the reviewed [auth keepalive workflow in dbpolito/skills](https://github.com/dbpolito/skills/blob/main/examples/opencode-auth.yml) with the same `OPENCODE_MODEL` repository variable:
 
 ```yaml
-name: Keep OpenCode auth fresh
+name: opencode-auth
+
 on:
   schedule:
-    - cron: '0 9 * * *'
+    - cron: '0 9 * * *' # Daily at 09:00 UTC.
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: opencode-auth
+  cancel-in-progress: false
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    concurrency:
-      group: opencode-auth
-      cancel-in-progress: false
+    timeout-minutes: 10
     steps:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Load OAuth credentials
+
+      - name: Load auth credentials
         id: auth
         env:
           OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
         run: printf '%s' "$OPENCODE_CI_AUTH_JSON" > "$HOME/opencode-ci.auth.json"
-      - name: Refresh via a normal run
-        run: npx --yes opencode-ci@0.1.10 run --model openai/gpt-6-luna 'Reply only OK. Do not use tools.'
-      - name: Save refreshed OAuth tokens
+
+      - name: Refresh auth
+        env:
+          OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL }}
+        run: |
+          npx --yes opencode-ci@0.1.12 run --model "$OPENCODE_MODEL" --timeout 120 \
+            'Reply only OK. Do not use tools.'
+
+      - name: Save refreshed auth credentials
         if: always() && steps.auth.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
@@ -197,7 +269,7 @@ jobs:
           fi
 ```
 
-The model request makes OpenCode check and refresh an expiring access token; copying the secret without a request does not. `opencode-ci` leaves the file untouched when credentials haven't changed, so the save steps skip unnecessary secret updates. Review jobs for different PRs and the keepalive still use different concurrency groups: if both refresh concurrently, they can race. Use one shared group or separate credentials to prevent that race. Monitor failures and reseed when needed. Codex's weekly cadence is not an OpenCode guarantee.
+The model request makes OpenCode check and refresh an expiring access token; copying the secret without a request does not. `opencode-ci` leaves the file untouched when credentials haven't changed, so the save step skips unnecessary secret updates. **Use one shared concurrency group** for every job using the same credential, including reviews of different PRs and the keepalive; otherwise concurrent refreshes can race. Monitor failures and reseed when needed. Codex's weekly cadence is not an OpenCode guarantee.
 
 ### Persistent self-hosted runner
 
@@ -217,6 +289,7 @@ npx opencode-ci run --model openai/gpt-6-luna --agent build 'Review the changed 
 | `--model provider/model#variant`, `-m` | Choose a model and optional variant |
 | `--variant NAME` | Use a variant of the chosen or default model |
 | `--agent NAME` | Choose an agent |
+| `--skill ID` | Require a skill by ID; repeat for multiple skills |
 | `--file PATH`, `-f` | Include a file, up to 10 MiB; repeat for multiple files |
 | `--thinking` | Print reasoning blocks when available |
 | `--auto` | Approve each permission request once |

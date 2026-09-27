@@ -4,8 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { resolveModel, run } from "../src/run"
 
-function fixture(input: { prompt: string; children?: boolean; parallel?: boolean; sameTitle?: boolean; holdRecovery?: boolean; holdSecondChild?: boolean; events?: Array<{ type: string; data: Record<string, unknown> }>; childFailed?: boolean; tool?: boolean; subagent?: boolean; model?: string; variant?: string; thinking?: boolean; auto?: boolean; files?: string[]; signal?: AbortSignal; waitForAbort?: boolean; paginated?: boolean }) {
-  const calls: { create?: unknown; command?: unknown; prompt?: unknown; interrupted?: string; messages: unknown[] } = { messages: [] }
+function fixture(input: { prompt: string; skills?: string[]; availableSkills?: string[]; children?: boolean; parallel?: boolean; sameTitle?: boolean; holdRecovery?: boolean; holdSecondChild?: boolean; events?: Array<{ type: string; data: Record<string, unknown> }>; childFailed?: boolean; tool?: boolean; subagent?: boolean; model?: string; variant?: string; thinking?: boolean; auto?: boolean; files?: string[]; signal?: AbortSignal; waitForAbort?: boolean; paginated?: boolean }) {
+  const calls: { create?: unknown; command?: unknown; prompt?: unknown; skillListed?: boolean; interrupted?: string; messages: unknown[] } = { messages: [] }
   const output: string[] = []
   let releaseEvents = () => {}
   const prompted = new Promise<void>((resolve) => { releaseEvents = resolve })
@@ -51,7 +51,7 @@ function fixture(input: { prompt: string; children?: boolean; parallel?: boolean
       get: async ({ sessionID }: { sessionID: string }) => ({ outcome: sessionID === "child" && input.childFailed ? "failed" : "succeeded" }),
       interrupt: async ({ sessionID }: { sessionID: string }) => { calls.interrupted = sessionID },
     },
-    skill: { list: async () => ({ data: [{ id: "review" }] }) },
+    skill: { list: async () => { calls.skillListed = true; return { data: (input.availableSkills ?? ["review"]).map((id) => ({ id })) } } },
     model: { default: async () => ({ data: { providerID: "openai", id: "gpt-6-sol" } }) },
     permission: { reply: async () => {} },
     message: {
@@ -74,7 +74,7 @@ function fixture(input: { prompt: string; children?: boolean; parallel?: boolean
     },
   }
   const execute = () => run(client as unknown as Parameters<typeof run>[0], {
-    directory: "/workspace", prompt: input.prompt, model: input.model, variant: input.variant,
+    directory: "/workspace", prompt: input.prompt, skills: input.skills, model: input.model, variant: input.variant,
     thinking: input.thinking, auto: input.auto, files: input.files, signal: input.signal, write: (text) => {
       output.push(text)
       if (text.includes("Say hi from agent two Hello")) releaseRecovery()
@@ -100,6 +100,29 @@ test("attaches skill mentions and includes child session output", async () => {
   expect(test.output.join("")).toContain("> build · gpt-6-sol · review")
   expect(test.output.join("")).toContain("reviewer child findings")
   expect(test.output.join("")).toContain("summary")
+})
+
+test("attaches multiple required skills without waiting for the skill catalog", async () => {
+  const test = fixture({ prompt: "Review this PR", skills: ["review-pr", "security", "review-pr"], availableSkills: [] })
+  await test.execute()
+  expect(test.calls.skillListed).toBeUndefined()
+  expect(test.calls.prompt).toEqual({ sessionID: "root", text: "Review this PR", skills: [
+    { id: "review-pr" }, { id: "security" },
+  ] })
+  expect(test.output.join("")).toContain("> build · gpt-6-sol · review-pr, security")
+})
+
+test("keeps a required skill attached when the cold catalog misses its mention", async () => {
+  const test = fixture({ prompt: "Use @review-pr to review", skills: ["review-pr"], availableSkills: [] })
+  await test.execute()
+  expect(test.calls.prompt).toMatchObject({ skills: [{ id: "review-pr" }] })
+  expect(test.output.join("")).toContain("> build · gpt-6-sol · review-pr")
+})
+
+test("does not silently ignore required skills on slash commands", async () => {
+  const test = fixture({ prompt: "/review", skills: ["review-pr"] })
+  await expect(test.execute()).rejects.toThrow("--skill cannot be used with slash commands")
+  expect(test.calls.command).toBeUndefined()
 })
 
 test("uses a dim subagent name prefix in terminals", async () => {

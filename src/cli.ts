@@ -16,6 +16,7 @@ type RunFlags = {
   model?: string
   variant?: string
   agent?: string
+  skill: string[]
   file: string[]
   title?: string
   thinking?: boolean
@@ -67,7 +68,7 @@ async function executeRun(words: string[], options: RunFlags) {
         if (auth) setAuth(db, auth)
         controller.signal.throwIfAborted()
         await run(opencode, {
-          directory, model: options.model, variant: options.variant, agent: options.agent, files,
+          directory, model: options.model, variant: options.variant, agent: options.agent, skills: options.skill, files,
           title: options.title, thinking: options.thinking, auto: options.auto, prompt, signal: controller.signal,
         })
       } finally {
@@ -98,6 +99,7 @@ const command = program.command("run")
   .option("-m, --model <provider/model#variant>", "model and optional variant")
   .option("--variant <name>", "model variant")
   .option("--agent <name>", "agent name")
+  .option("--skill <id>", "require a skill (repeatable)", collect, [])
   .option("-f, --file <path>", "include a file (repeatable)", collect, [])
   .option("--title <title>", "session title")
   .option("--thinking", "print reasoning blocks")

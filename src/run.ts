@@ -9,6 +9,7 @@ export type RunOptions = {
   directory: string
   prompt: string
   agent?: string
+  skills?: string[]
   title?: string
   model?: string
   variant?: string
@@ -254,16 +255,20 @@ export async function run(client: Client, options: RunOptions) {
     checkCancelled()
     const slash = /^\/([\w.-]+)(?:\s+([\s\S]*))?$/.exec(prompt)
     if (slash) {
+      if (options.skills?.length) throw new Error("--skill cannot be used with slash commands")
       await client.session.command({ sessionID: rootID, name: slash[1]!, text: slash[2] ?? "", files: files.length ? files : undefined }, { signal: options.signal })
     } else {
-      const available = await client.skill.list({ location: { directory: options.directory } })
-      const names = new Set(available.data.map((skill) => skill.id))
-      const skills = [...prompt.matchAll(/(^|\s)@(?:skill:)?([\w.-]+)/g)]
+      const mentions = [...prompt.matchAll(/(^|\s)@(?:skill:)?([\w.-]+)/g)]
+      const available = mentions.length ? await client.skill.list({ location: { directory: options.directory } }) : undefined
+      const names = new Set(available?.data.map((skill) => skill.id) ?? [])
+      const skills = [...new Set(options.skills ?? [])].map((id) => ({ id }))
+      skills.push(...mentions
         .filter((match) => names.has(match[2]!))
+        .filter((match) => !skills.some((skill) => skill.id === match[2]))
         .map((match) => ({
           id: match[2]!,
           mention: { start: match.index + match[1]!.length, end: match.index + match[0]!.length, text: match[0]!.trim() },
-        }))
+        })))
       attachedSkills.set(rootID, [...new Set(skills.map((skill) => skill.id))])
       await client.session.prompt({ sessionID: rootID, text: prompt, files: files.length ? files : undefined, skills }, { signal: options.signal })
     }
