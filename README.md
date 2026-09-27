@@ -145,17 +145,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
           OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
-        run: |
-          original="$(printf '%s' "$OPENCODE_CI_AUTH_JSON" | jq -cS .)"
-          updated="$(jq -cS . "$HOME/opencode-ci.auth.json")"
-          if [ "$original" != "$updated" ]; then
-            gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
-          fi
+        run: cmp -s "$HOME/opencode-ci.auth.json" <(printf '%s' "$OPENCODE_CI_AUTH_JSON") || gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
 ```
 
 This prints the review to the Actions log; posting a formal GitHub review requires a separate publishing step. Only grant the account secret to PR authors and code you trust.
 
-Each run uses a fresh OpenCode database and writes refreshed tokens to `~/opencode-ci.auth.json`, including after a failed session if cleanup completes. For another file, use both `--auth-file PATH` and `--auth-output PATH`.
+Each run uses a fresh OpenCode database and updates `~/opencode-ci.auth.json` only when credentials change, including after a failed session if cleanup completes. For another file, use both `--auth-file PATH` and `--auth-output PATH`.
 
 Do not cache, log, or upload the credential file. A failed refresh or interrupted write-back may require a fresh login and reseed.
 
@@ -193,15 +188,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
           OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
-        run: |
-          original="$(printf '%s' "$OPENCODE_CI_AUTH_JSON" | jq -cS .)"
-          updated="$(jq -cS . "$HOME/opencode-ci.auth.json")"
-          if [ "$original" != "$updated" ]; then
-            gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
-          fi
+        run: cmp -s "$HOME/opencode-ci.auth.json" <(printf '%s' "$OPENCODE_CI_AUTH_JSON") || gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
 ```
 
-The model request makes OpenCode check and refresh an expiring access token; copying the secret without a request does not. The save steps skip unchanged credentials, so an idle job won't overwrite a token another job refreshed. Review jobs for different PRs and the keepalive still use different concurrency groups: if both refresh concurrently, they can race. Use one shared group or separate credentials to prevent that race. Monitor failures and reseed when needed. Codex's weekly cadence is not an OpenCode guarantee.
+The model request makes OpenCode check and refresh an expiring access token; copying the secret without a request does not. `opencode-ci` leaves the file untouched when credentials haven't changed, so the save steps skip unnecessary secret updates. Review jobs for different PRs and the keepalive still use different concurrency groups: if both refresh concurrently, they can race. Use one shared group or separate credentials to prevent that race. Monitor failures and reseed when needed. Codex's weekly cadence is not an OpenCode guarantee.
 
 ### Persistent self-hosted runner
 

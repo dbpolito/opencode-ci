@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises"
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -29,6 +29,26 @@ test("loads an optional default auth file without ignoring invalid credentials",
     expect(await loadAuthIfExists(path)).toEqual(fixture)
     await Bun.write(path, "invalid JSON")
     await expect(loadAuthIfExists(path)).rejects.toThrow("Invalid auth JSON")
+  } finally { await rm(temp, { recursive: true, force: true }) }
+})
+
+test("does not rewrite unchanged credentials and still protects the file", async () => {
+  const temp = await mkdtemp(join(tmpdir(), "opencode-ci-unchanged-auth-test-"))
+  const path = join(temp, "auth.json")
+  try {
+    const original = JSON.stringify(fixture, null, 2)
+    await writeFile(path, original)
+    await chmod(path, 0o644)
+    const before = await stat(path)
+    await saveAuth(path, fixture)
+    const after = await stat(path)
+    expect(await readFile(path, "utf8")).toBe(original)
+    expect(after.ino).toBe(before.ino)
+    expect(after.mtimeMs).toBe(before.mtimeMs)
+    expect(after.mode & 0o777).toBe(0o600)
+
+    await saveAuth(path, { ...fixture, openai: { ...fixture.openai, refresh: "new-refresh" } })
+    expect(JSON.parse(await readFile(path, "utf8")).openai.refresh).toBe("new-refresh")
   } finally { await rm(temp, { recursive: true, force: true }) }
 })
 

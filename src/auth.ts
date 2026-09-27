@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
-import { readFile, rename, rm, writeFile } from "node:fs/promises"
+import { chmod, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { isDeepStrictEqual } from "node:util"
 import { DatabaseSync } from "node:sqlite"
 
 type OAuth = {
@@ -97,6 +98,11 @@ export function getAuth(path: string, integrations: ReadonlyArray<string>): Auth
 
 /** Write a new secret file atomically with owner-only permissions. */
 export async function saveAuth(path: string, auth: Auth) {
+  const current = await loadAuthIfExists(path)
+  if (current && isDeepStrictEqual(current, auth)) {
+    await chmod(path, 0o600)
+    return
+  }
   const temp = `${path}.${randomUUID()}.tmp`
   try {
     await writeFile(temp, JSON.stringify(auth) + "\n", { mode: 0o600, flag: "wx" })
