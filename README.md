@@ -144,7 +144,44 @@ Each run uses a fresh OpenCode database and writes refreshed tokens to `~/openco
 
 Do not cache, log, or upload the credential file. A failed refresh or interrupted write-back may require a fresh login and reseed.
 
-If real jobs may be idle, schedule a small run such as `opencode-ci run --model openai/YOUR_MODEL 'Reply only OK. Do not use tools.'` with the same restore/run/write-back steps and concurrency group. Daily (`cron: '0 9 * * *'`, 09:00 UTC) is a practical starting point. The run makes OpenCode check and refresh an expiring access token; copying the secret without a model request does not. Monitor failures and reseed when needed; Codex's weekly cadence is not an OpenCode guarantee.
+If real jobs may be idle, run this daily keepalive (09:00 UTC). It shares the review job's concurrency group so both jobs use the latest credential:
+
+```yaml
+name: Keep OpenCode auth fresh
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: opencode-oauth-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Load OAuth credentials
+        id: auth
+        env:
+          OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
+        run: printf '%s' "$OPENCODE_CI_AUTH_JSON" > "$HOME/opencode-ci.auth.json"
+      - name: Refresh via a normal run
+        working-directory: ${{ runner.temp }}
+        run: npx --yes @kompassdev/opencode-ci@0.1.8 run --model openai/gpt-6-luna 'Reply only OK. Do not use tools.'
+      - name: Save refreshed OAuth tokens
+        if: always() && steps.auth.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
+```
+
+The model request makes OpenCode check and refresh an expiring access token; copying the secret without a request does not. Monitor failures and reseed when needed. Codex's weekly cadence is not an OpenCode guarantee.
 
 ### Persistent self-hosted runner
 
