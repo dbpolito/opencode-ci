@@ -139,8 +139,7 @@ jobs:
       - name: Review
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: npx --yes @kompassdev/opencode-ci@0.1.8 run --auto --model openai/gpt-6-luna "Review the changes from $BASE_SHA to $HEAD_SHA for bugs. Do not edit files."
+        run: npx --yes @kompassdev/opencode-ci@0.1.8 run --auto --model openai/gpt-6-luna "Review the PR diff ($BASE_SHA...HEAD) for bugs. Do not edit files."
       - name: Save refreshed OAuth tokens
         if: always() && steps.auth.outcome == 'success'
         env:
