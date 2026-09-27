@@ -117,7 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
-      group: opencode-oauth-${{ github.repository }}
+      group: opencode-oauth
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -160,7 +160,7 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     concurrency:
-      group: opencode-oauth-${{ github.repository }}
+      group: opencode-oauth
       cancel-in-progress: false
     steps:
       - uses: actions/setup-node@v4
