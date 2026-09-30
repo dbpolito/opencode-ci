@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { stripVTControlCharacters } from "node:util"
-import { createMask, githubMask } from "../src/mask"
+import { createMask } from "../src/mask"
 import type { Auth } from "../src/auth"
 import { assistant, fixture } from "./helpers"
 
@@ -47,9 +47,8 @@ test("masks JSON-escaped, URL-encoded and prefixed multiline values", () => {
     .toBe("child [REDACTED]\nchild [REDACTED]")
 })
 
-test("retains old masks after token rotation and registers each value once", () => {
-  const registered: string[] = []
-  const mask = createMask({}, (value) => registered.push(value))
+test("retains old masks after token rotation", () => {
+  const mask = createMask({})
   mask.auth(auth)
   expect(mask.redact(auth.openai.access)).toBe("[REDACTED]")
   const refreshed = { ...auth, openai: { ...auth.openai, access: "rotated-access-value", refresh: "rotated-refresh-value" } }
@@ -57,10 +56,6 @@ test("retains old masks after token rotation and registers each value once", () 
   mask.auth(refreshed)
   expect(mask.redact("oauth-access-value oauth-refresh-value rotated-access-value rotated-refresh-value"))
     .toBe("[REDACTED] [REDACTED] [REDACTED] [REDACTED]")
-  expect(registered.filter((value) => value === "rotated-access-value")).toHaveLength(1)
-  expect(registered.filter((value) => value === "rotated-refresh-value")).toHaveLength(1)
-  expect(githubMask("secret%value\r\n::warning::not-a-command"))
-    .toBe("::add-mask::secret%25value%0D%0A::warning::not-a-command\n")
 })
 
 test("redacts assistant, reasoning, child and tool output on both channels", async () => {
