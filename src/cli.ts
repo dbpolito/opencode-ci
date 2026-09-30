@@ -10,19 +10,11 @@ import packageJSON from "../package.json" with { type: "json" }
 import { getAuth, loadAuth, loadAuthIfExists, parseAuth, saveAuth, setAuth, type Auth } from "./auth"
 import { run } from "./run"
 import { noninteractive } from "./noninteractive"
-import { createMask, githubMask } from "./mask"
+import { createOutput } from "./mask"
 
-const mask = createMask(process.env, process.env.GITHUB_ACTIONS === "true"
-  ? (value) => { process.stderr.write(githubMask(value)) }
-  : undefined)
 let currentAuth: (() => Auth) | undefined
-const output = (stream: NodeJS.WriteStream, text: string) => {
-  // Credentials can rotate during the run, before the final auth write-back.
-  if (currentAuth) mask.auth(currentAuth())
-  stream.write(mask.redact(text))
-}
-const write = (text: string) => output(process.stdout, text)
-const writeStatus = (text: string) => output(process.stderr, text)
+const mask = createOutput(process.env, process.stdout, process.stderr, () => currentAuth?.())
+const { write, writeStatus } = mask
 
 const collect = (value: string, previous: string[]) => [...previous, value]
 

@@ -1,6 +1,6 @@
 import type { Auth } from "./auth"
 
-export function createMask(env: NodeJS.ProcessEnv = process.env, register?: (value: string) => void) {
+export function createMask(env: NodeJS.ProcessEnv = process.env) {
   const values = new Set<string>()
   let pattern: RegExp | undefined
 
@@ -11,7 +11,6 @@ export function createMask(env: NodeJS.ProcessEnv = process.env, register?: (val
       if (!variant || values.has(variant)) continue
       values.add(variant)
       pattern = undefined
-      register?.(variant)
     }
   }
 
@@ -48,6 +47,24 @@ export function createMask(env: NodeJS.ProcessEnv = process.env, register?: (val
   }
 }
 
-export function githubMask(value: string) {
-  return `::add-mask::${value.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}\n`
+// Never register secrets via workflow commands: stderr can be piped to a file
+// before GitHub consumes the commands. Local redaction also protects the console.
+export function createOutput(
+  env: NodeJS.ProcessEnv = process.env,
+  stdout: Pick<NodeJS.WriteStream, "write"> = process.stdout,
+  stderr: Pick<NodeJS.WriteStream, "write"> = process.stderr,
+  currentAuth?: () => Auth | undefined,
+) {
+  const mask = createMask(env)
+  const output = (stream: Pick<NodeJS.WriteStream, "write">, text: string) => {
+    // Credentials can rotate during the run, before the final auth write-back.
+    const auth = currentAuth?.()
+    if (auth) mask.auth(auth)
+    stream.write(mask.redact(text))
+  }
+  return {
+    auth: mask.auth,
+    write: (text: string) => output(stdout, text),
+    writeStatus: (text: string) => output(stderr, text),
+  }
 }
