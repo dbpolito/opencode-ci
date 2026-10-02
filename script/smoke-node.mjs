@@ -58,6 +58,18 @@ const unavailable = spawnSync(process.execPath, ["dist/cli.js", "run", "--model"
 assert.equal(unavailable.status, 1, unavailable.error?.message ?? unavailable.stderr)
 assert.match(unavailable.stderr, /Model unavailable: missing\/test/)
 
+const catalog = spawnSync(process.execPath, ["--input-type=module", "-e", `
+  import assert from 'node:assert/strict';
+  import { OpenCode } from '@opencode/sdk';
+  const host = await OpenCode.create({ database: { path: ':memory:' }, config: { project: false } });
+  try {
+    await host.integration.list();
+    const models = await host.model.list();
+    assert.ok(models.data.some(model => model.providerID === 'openai' && model.id === 'gpt-6.1-sol'), 'SDK catalog must support the configured review model');
+  } finally { await host.close(); }
+`], { encoding: "utf8", timeout: 30_000, env: { ...process.env, OPENAI_API_KEY: "smoke-test-key" } })
+assert.equal(catalog.status, 0, catalog.error?.message ?? catalog.stderr)
+
 const temp = mkdtempSync(join(tmpdir(), "opencode-ci-smoke-"))
 try {
   const auth = {
