@@ -23,6 +23,7 @@ test("drains a delayed terminal failure after session.wait settles without an as
 
 test("dispatches slash commands", async () => {
   const f = fixture({ prompt: "/review important changes" })
+  f.sessions.set("root", { id: "root" })
   await f.execute()
   expect(f.client.session.command).toHaveBeenCalledWith({ sessionID: "root", name: "review", text: "important changes", files: undefined }, expect.anything())
   expect(f.client.session.prompt).not.toHaveBeenCalled()

@@ -323,13 +323,17 @@ export async function run(client: Client, options: RunOptions) {
     // The wait endpoint can settle before SSE delivers the terminal event.
     // Drain through that event before closing the stream, especially when an
     // early failure has no assistant message to recover during replay.
-    const cancelled = Promise.withResolvers<never>()
-    const abortTerminal = () => cancelled.reject(signal.reason)
-    signal.addEventListener("abort", abortTerminal, { once: true })
-    try {
-      checkCancelled()
-      await Promise.race([terminal.promise, cancelled.promise])
-    } finally { signal.removeEventListener("abort", abortTerminal) }
+    // Plugin commands may finish without ever executing the root session.
+    const root = await client.session.get({ sessionID: rootID }, { signal })
+    if (root.outcome !== undefined) {
+      const cancelled = Promise.withResolvers<never>()
+      const abortTerminal = () => cancelled.reject(signal.reason)
+      signal.addEventListener("abort", abortTerminal, { once: true })
+      try {
+        checkCancelled()
+        await Promise.race([terminal.promise, cancelled.promise])
+      } finally { signal.removeEventListener("abort", abortTerminal) }
+    }
     checkCancelled()
     await drainFinishes()
 

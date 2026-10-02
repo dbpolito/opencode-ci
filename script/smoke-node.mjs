@@ -167,7 +167,14 @@ try {
   mkdirSync(plugin, { recursive: true })
   const marker = join(temp, "plugin-loaded")
   writeFileSync(join(plugin, "index.js"), `import { writeFileSync } from "node:fs";
-    export default { id: "smoke.project", setup() { writeFileSync(${JSON.stringify(marker)}, "loaded") } }`)
+    export default { id: "smoke.project", async setup(ctx) {
+      writeFileSync(${JSON.stringify(marker)}, "loaded");
+      await ctx.command.transform(editor => editor.add({ name: "noop", execute: async () => {} }));
+    } }`)
+  const noop = spawnSync(process.execPath, ["dist/cli.js", "run", "--directory", project, "--timeout", "15", "/noop"], {
+    encoding: "utf8", timeout: 30_000,
+  })
+  assert.equal(noop.status, 0, noop.error?.message ?? noop.stderr)
   for (const skip of [false, true]) {
     rmSync(marker, { force: true })
     const host = await OpenCode.create({

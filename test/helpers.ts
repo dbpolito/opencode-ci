@@ -49,7 +49,8 @@ export function fixture(options: Partial<RunOptions> = {}) {
         await Promise.race([prompted.promise, aborted(signal)])
         if (signal.aborted) return
         for (const event of events) yield event
-        yield { type: "session.execution.succeeded", data: { sessionID: "root" } }
+        if (sessions.get("root")?.outcome !== undefined)
+          yield { type: "session.execution.succeeded", data: { sessionID: "root" } }
         eventsDone.resolve()
         await aborted(signal)
       },
