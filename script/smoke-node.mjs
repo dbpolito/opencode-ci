@@ -52,6 +52,12 @@ const invalid = spawnSync(process.execPath, ["dist/cli.js", "run", "--model", "i
 assert.equal(invalid.status, 1, invalid.error?.message ?? invalid.stderr)
 assert.match(invalid.stderr, /Invalid model reference/)
 
+const unavailable = spawnSync(process.execPath, ["dist/cli.js", "run", "--model", "missing/test", "--timeout", "15", "Hello"], {
+  encoding: "utf8", timeout: 30_000,
+})
+assert.equal(unavailable.status, 1, unavailable.error?.message ?? unavailable.stderr)
+assert.match(unavailable.stderr, /Model unavailable: missing\/test/)
+
 const temp = mkdtempSync(join(tmpdir(), "opencode-ci-smoke-"))
 try {
   const auth = {
