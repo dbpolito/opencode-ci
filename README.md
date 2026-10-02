@@ -99,6 +99,7 @@ Only expose credentials to trusted code and PR authors. The review example exclu
 ## Running unattended
 
 - No interactive questions. Requests for other interactive input fail the run.
+- Web search defaults to `random` to avoid interactive provider selection. Explicit provider settings and disabled web search are preserved.
 - Use `--auto` to approve permission requests once; configured denials still apply.
 - Failed sessions fail the job. The default timeout is 45 minutes; SIGINT and SIGTERM interrupt active work.
 - Each run starts a fresh session and database.

@@ -99,6 +99,37 @@ try {
       }
     }
   } finally { await host.close() }
+  for (const provider of [undefined, "exa", false]) {
+    const directory = join(temp, `websearch-${String(provider)}`)
+    mkdirSync(directory)
+    const configuration = provider === undefined ? {} : { websearch: provider === false ? false : { provider } }
+    const script = `
+      import assert from 'node:assert/strict';
+      import { OpenCode } from ${JSON.stringify(import.meta.resolve("@opencode/sdk"))};
+      import { noninteractive } from ${JSON.stringify(new URL("../src/noninteractive.ts", import.meta.url).href)};
+      const host = await OpenCode.create({
+        config: { project: false, content: ${JSON.stringify(JSON.stringify(configuration))} },
+        database: { path: ${JSON.stringify(join(directory, "opencode.db"))} },
+        plugins: [noninteractive, {
+          id: 'opencode-ci.smoke.websearch',
+          async setup(ctx) {
+            await ctx.websearch.transform(editor => {
+              for (const id of ['exa', 'firecrawl', 'parallel', 'tavily', 'tinyfish'])
+                editor.add({ id, name: id, execute: async () => [] });
+            });
+          },
+        }],
+      });
+      try {
+        await host.integration.list();
+        await host.websearch.providers();
+        ${provider === false ? `await assert.rejects(host.websearch.query({ query: 'smoke' }), /disabled/i);` : `const result = await host.websearch.query({ query: 'smoke' });
+        ${provider === undefined ? `assert.ok(['exa', 'firecrawl', 'parallel', 'tavily', 'tinyfish'].includes(result.data.providerID));` : `assert.equal(result.data.providerID, ${JSON.stringify(provider)});`}`}
+      } finally { await host.close(); }
+    `
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { cwd: directory, encoding: "utf8", timeout: 60_000 })
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr)
+  }
   const db = new DatabaseSync(dbPath)
   try {
     const insert = db.prepare(`INSERT INTO credential (id, integration_id, label, value, active, time_created, time_updated)
