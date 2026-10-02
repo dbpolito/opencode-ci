@@ -37,6 +37,7 @@ export async function run(client: Client, options: RunOptions) {
   const tools = new Map<string, { name: string; input: Record<string, unknown> }>()
   let failure: Error | undefined
   let rootID: string | undefined
+  const terminal = Promise.withResolvers<void>()
   let interrupting: Promise<unknown> | undefined
   const stop = () => {
     if (rootID && !interrupting)
@@ -248,6 +249,8 @@ export async function run(client: Client, options: RunOptions) {
         line(event.data.sessionID, `Error: ${event.data.error.message}\n`)
         failure = new Error(event.data.error.message)
       }
+      if ((event.type === "session.execution.succeeded" || event.type === "session.execution.failed" || event.type === "session.execution.interrupted") && event.data.sessionID === rootID)
+        terminal.resolve()
       if (event.type === "permission.asked") {
         await replyPermission(event.data)
       }
@@ -317,6 +320,20 @@ export async function run(client: Client, options: RunOptions) {
       ...(globals.location.directory === options.directory ? globals.data.filter((form) => form.sessionID === "global").map(cancelForm) : []),
     ])
     await client.session.wait({ sessionID: rootID }, { signal })
+    // The wait endpoint can settle before SSE delivers the terminal event.
+    // Drain through that event before closing the stream, especially when an
+    // early failure has no assistant message to recover during replay.
+    // Plugin commands may finish without ever executing the root session.
+    const root = await client.session.get({ sessionID: rootID }, { signal })
+    if (root.outcome !== undefined) {
+      const cancelled = Promise.withResolvers<never>()
+      const abortTerminal = () => cancelled.reject(signal.reason)
+      signal.addEventListener("abort", abortTerminal, { once: true })
+      try {
+        checkCancelled()
+        await Promise.race([terminal.promise, cancelled.promise])
+      } finally { signal.removeEventListener("abort", abortTerminal) }
+    }
     checkCancelled()
     await drainFinishes()
 

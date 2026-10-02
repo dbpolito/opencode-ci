@@ -48,6 +48,7 @@ test("prints alternating child events live before either child completes", async
       expect(f.client.message.list).not.toHaveBeenCalled()
     }
     f.eventsDone.resolve()
+    yield { type: "session.execution.succeeded", data: { sessionID: "root" } }
     await aborted(signal)
   }
   await f.execute()
@@ -117,6 +118,7 @@ test("replays a resumed child's new messages before its next completion", async 
     yield* toolEvents("tool_1", "Follow-up", "child_0")
     await second.promise
     f.eventsDone.resolve()
+    yield { type: "session.execution.succeeded", data: { sessionID: "root" } }
     await aborted(signal)
   }
   await f.execute()

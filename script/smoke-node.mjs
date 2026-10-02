@@ -52,6 +52,24 @@ const invalid = spawnSync(process.execPath, ["dist/cli.js", "run", "--model", "i
 assert.equal(invalid.status, 1, invalid.error?.message ?? invalid.stderr)
 assert.match(invalid.stderr, /Invalid model reference/)
 
+const unavailable = spawnSync(process.execPath, ["dist/cli.js", "run", "--model", "missing/test", "--timeout", "15", "Hello"], {
+  encoding: "utf8", timeout: 30_000,
+})
+assert.equal(unavailable.status, 1, unavailable.error?.message ?? unavailable.stderr)
+assert.match(unavailable.stderr, /Model unavailable: missing\/test/)
+
+const catalog = spawnSync(process.execPath, ["--input-type=module", "-e", `
+  import assert from 'node:assert/strict';
+  import { OpenCode } from '@opencode/sdk';
+  const host = await OpenCode.create({ database: { path: ':memory:' }, config: { project: false } });
+  try {
+    await host.integration.list();
+    const models = await host.model.list();
+    assert.ok(models.data.some(model => model.providerID === 'openai' && model.id === 'gpt-6.1-sol'), 'SDK catalog must support the configured review model');
+  } finally { await host.close(); }
+`], { encoding: "utf8", timeout: 30_000, env: { ...process.env, OPENAI_API_KEY: "smoke-test-key" } })
+assert.equal(catalog.status, 0, catalog.error?.message ?? catalog.stderr)
+
 const temp = mkdtempSync(join(tmpdir(), "opencode-ci-smoke-"))
 try {
   const auth = {
@@ -99,6 +117,37 @@ try {
       }
     }
   } finally { await host.close() }
+  for (const provider of [undefined, "exa", false]) {
+    const directory = join(temp, `websearch-${String(provider)}`)
+    mkdirSync(directory)
+    const configuration = provider === undefined ? {} : { websearch: provider === false ? false : { provider } }
+    const script = `
+      import assert from 'node:assert/strict';
+      import { OpenCode } from ${JSON.stringify(import.meta.resolve("@opencode/sdk"))};
+      import { noninteractive } from ${JSON.stringify(new URL("../src/noninteractive.ts", import.meta.url).href)};
+      const host = await OpenCode.create({
+        config: { project: false, content: ${JSON.stringify(JSON.stringify(configuration))} },
+        database: { path: ${JSON.stringify(join(directory, "opencode.db"))} },
+        plugins: [noninteractive, {
+          id: 'opencode-ci.smoke.websearch',
+          async setup(ctx) {
+            await ctx.websearch.transform(editor => {
+              for (const id of ['exa', 'firecrawl', 'parallel', 'tavily', 'tinyfish'])
+                editor.add({ id, name: id, execute: async () => [] });
+            });
+          },
+        }],
+      });
+      try {
+        await host.integration.list();
+        await host.websearch.providers();
+        ${provider === false ? `await assert.rejects(host.websearch.query({ query: 'smoke' }), /disabled/i);` : `const result = await host.websearch.query({ query: 'smoke' });
+        ${provider === undefined ? `assert.ok(['exa', 'firecrawl', 'parallel', 'tavily', 'tinyfish'].includes(result.data.providerID));` : `assert.equal(result.data.providerID, ${JSON.stringify(provider)});`}`}
+      } finally { await host.close(); }
+    `
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { cwd: directory, encoding: "utf8", timeout: 60_000 })
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr)
+  }
   const db = new DatabaseSync(dbPath)
   try {
     const insert = db.prepare(`INSERT INTO credential (id, integration_id, label, value, active, time_created, time_updated)
@@ -118,7 +167,14 @@ try {
   mkdirSync(plugin, { recursive: true })
   const marker = join(temp, "plugin-loaded")
   writeFileSync(join(plugin, "index.js"), `import { writeFileSync } from "node:fs";
-    export default { id: "smoke.project", setup() { writeFileSync(${JSON.stringify(marker)}, "loaded") } }`)
+    export default { id: "smoke.project", async setup(ctx) {
+      writeFileSync(${JSON.stringify(marker)}, "loaded");
+      await ctx.command.transform(editor => editor.add({ name: "noop", execute: async () => {} }));
+    } }`)
+  const noop = spawnSync(process.execPath, ["dist/cli.js", "run", "--directory", project, "--timeout", "15", "/noop"], {
+    encoding: "utf8", timeout: 30_000,
+  })
+  assert.equal(noop.status, 0, noop.error?.message ?? noop.stderr)
   for (const skip of [false, true]) {
     rmSync(marker, { force: true })
     const host = await OpenCode.create({

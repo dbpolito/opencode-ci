@@ -5,8 +5,25 @@ import { join } from "node:path"
 import { resolveModel } from "../src/run"
 import { aborted, assistant, deferred, fixture } from "./helpers"
 
+test("drains a delayed terminal failure after session.wait settles without an assistant message", async () => {
+  const f = fixture()
+  const waited = deferred()
+  f.messages.set("root", [])
+  f.sessions.set("root", { id: "root", outcome: "failed" })
+  f.client.session.wait.mockImplementation(async () => { waited.resolve() })
+  f.client.event.subscribe = async function* ({ signal }) {
+    yield { type: "server.connected", data: {} }
+    await waited.promise
+    yield { type: "session.execution.failed", data: { sessionID: "root", error: { message: "Model unavailable: openai/test-model" } } }
+    await aborted(signal)
+  }
+  await expect(f.execute()).rejects.toThrow("Model unavailable: openai/test-model")
+  expect(f.output.join("")).toContain("Error: Model unavailable: openai/test-model")
+})
+
 test("dispatches slash commands", async () => {
   const f = fixture({ prompt: "/review important changes" })
+  f.sessions.set("root", { id: "root" })
   await f.execute()
   expect(f.client.session.command).toHaveBeenCalledWith({ sessionID: "root", name: "review", text: "important changes", files: undefined }, expect.anything())
   expect(f.client.session.prompt).not.toHaveBeenCalled()
