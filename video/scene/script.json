@@ -1,0 +1,7 @@
+[
+  {"id":"intro","text":"Meet Open Code see eye. It runs your coding agent in your pipeline, with the workflow you already use."},
+  {"id":"setup","text":"It can sign in with your Chat GPT Plus or Pro subscription through OAuth. Give C I a dedicated login. When tokens refresh, the updated credentials are saved for the next run."},
+  {"id":"agents","text":"Then the agent hands work to two subagents. One checks tests while the other checks security. Their steps and replies show up with a label for each child agent, so you can follow the work even when it overlaps."},
+  {"id":"run","text":"Your project commands work here too. Call slash review, or load an installed skill explicitly with the skill flag. Humanizer, for example. If a required skill is missing, the run fails."},
+  {"id":"finish","text":"There's a full pull request review example in the project if you want to try it. Pick a job and let it run."}
+]

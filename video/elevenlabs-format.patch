@@ -1,0 +1,26 @@
+diff --git a/crates/psychopomp-media/src/spec.rs b/crates/psychopomp-media/src/spec.rs
+--- a/crates/psychopomp-media/src/spec.rs
++++ b/crates/psychopomp-media/src/spec.rs
+@@ -20,7 +20,7 @@
+ /// The macOS voice that drafts speech.
+ pub const SAY_DEFAULT: &str = "Samantha";
+ 
+-pub(crate) const ELEVEN_FORMAT: &str = "mp3_44100_192";
++pub(crate) const ELEVEN_FORMAT: &str = "mp3_44100_128";
+ pub(crate) const FISH_FORMAT: &str = "wav_44100";
+ pub(crate) const SAY_FORMAT: &str = "wav_48000";
+ /// Post-processing is part of the key: change the code, change the string.
+@@ -715,11 +715,11 @@
+         assert_eq!(
+             canonical,
+             format!(
+-                r#"{{"align":"provider","backend":"elevenlabs","format":"mp3_44100_192","kind":"speech","lines":[{{"text":"[soft] Hi.","voice":"{KIT}"}}],"model":"eleven_v4","post":"{SPEECH_POST}","route":"speech","settings":{{"similarity":0.65,"stability":0.2}}}}"#
++                r#"{{"align":"provider","backend":"elevenlabs","format":"mp3_44100_128","kind":"speech","lines":[{{"text":"[soft] Hi.","voice":"{KIT}"}}],"model":"eleven_v4","post":"{SPEECH_POST}","route":"speech","settings":{{"similarity":0.65,"stability":0.2}}}}"#
+             )
+         );
+         // A golden key: changing the canonical form or hashing rekeys every lock.
+-        assert_eq!(spec.key(), "78ad04e30e06ec0a");
++        assert_eq!(spec.key(), "fc7b9b6879190900");
+         for changed in [
+             line(&kit, "[soft] Hi!"),
+             line(&kit.clone().stability(0.3), "[soft] Hi."),

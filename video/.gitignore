@@ -1,0 +1,4 @@
+output/
+.psychopomp/
+.env
+__pycache__/
