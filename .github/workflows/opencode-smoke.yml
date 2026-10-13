@@ -1,0 +1,44 @@
+name: OpenCode published package check
+
+on:
+  schedule:
+    - cron: '30 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: opencode-auth
+      cancel-in-progress: false
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Load auth credentials
+        id: auth
+        env:
+          OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
+        run: |
+          umask 077
+          printf '%s' "$OPENCODE_CI_AUTH_JSON" > "$HOME/opencode-ci.auth.json"
+      - name: Say hi with the published package
+        working-directory: ${{ runner.temp }}
+        env:
+          OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL }}
+        run: |
+          npx --yes opencode-ci@latest models
+          npx --yes opencode-ci@latest run --model "$OPENCODE_MODEL" --timeout 120 'Say hi. Do not use tools.'
+      - name: Save refreshed auth credentials
+        if: always() && steps.auth.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          OPENCODE_CI_AUTH_JSON: ${{ secrets.OPENCODE_CI_AUTH_JSON }}
+        run: |
+          if ! cmp -s "$HOME/opencode-ci.auth.json" <(printf '%s' "$OPENCODE_CI_AUTH_JSON"); then
+            gh secret set OPENCODE_CI_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$HOME/opencode-ci.auth.json"
+          fi

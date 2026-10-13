@@ -29,6 +29,10 @@ const runHelp = spawnSync(process.execPath, ["dist/cli.js", "run", "--help"], { 
 assert.equal(runHelp.status, 0, runHelp.stderr)
 assert.match(runHelp.stdout, /--auth-output/)
 assert.match(runHelp.stdout, /--skip-project-config/)
+const modelsHelp = spawnSync(process.execPath, ["dist/cli.js", "models", "--help"], { encoding: "utf8" })
+assert.equal(modelsHelp.status, 0, modelsHelp.stderr)
+assert.match(modelsHelp.stdout, /--json/)
+assert.match(modelsHelp.stdout, /--auth-env/)
 const version = spawnSync(process.execPath, ["dist/cli.js", "--version"], { encoding: "utf8" })
 assert.equal(version.status, 0, version.stderr)
 assert.equal(version.stdout.trim(), packageJSON.version)
@@ -72,6 +76,59 @@ assert.equal(catalog.status, 0, catalog.error?.message ?? catalog.stderr)
 
 const temp = mkdtempSync(join(tmpdir(), "opencode-ci-smoke-"))
 try {
+  const oauthCatalog = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import assert from 'node:assert/strict';
+    import { OpenCode } from '@opencode/sdk';
+    import { setAuth } from ${JSON.stringify(new URL("../src/auth.ts", import.meta.url).href)};
+    const path = ${JSON.stringify(join(temp, "oauth-catalog.db"))};
+    const host = await OpenCode.create({ database: { path }, config: { project: false } });
+    try {
+      // No model cache or metadata: a fresh CI database must use the OAuth
+      // fallback catalog. Fake unexpired tokens avoid any refresh request.
+      setAuth(path, { openai: {
+        type: 'oauth', methodID: 'chatgpt-token-sharing', access: 'smoke-test-token',
+        refresh: '', expires: Date.now() + 3600000,
+      } });
+      await host.integration.list();
+      const models = await host.model.list();
+      assert.ok(models.data.some(model => model.providerID === 'openai' && model.id === 'gpt-6.1-sol'), 'ChatGPT token-sharing fallback must support the review model without a cached inventory');
+    } finally { await host.close(); }
+  `], { encoding: "utf8", timeout: 30_000 })
+  assert.equal(oauthCatalog.status, 0, oauthCatalog.error?.message ?? oauthCatalog.stderr)
+
+  const modelsAuth = { openai: {
+    type: "oauth", methodID: "chatgpt-token-sharing", access: "smoke-cli-token",
+    refresh: "", expires: Date.now() + 3600000,
+  } }
+  const modelsOutput = join(temp, "models-auth.json")
+  const models = spawnSync(process.execPath, ["dist/cli.js", "models", "openai", "--json", "--directory", temp,
+    "--skip-project-config", "--auth-env", "TEST_MODELS_AUTH", "--auth-output", modelsOutput], {
+    encoding: "utf8", timeout: 30_000, env: { ...process.env, TEST_MODELS_AUTH: JSON.stringify(modelsAuth) },
+  })
+  assert.equal(models.status, 0, models.error?.message ?? models.stderr)
+  const available = JSON.parse(models.stdout)
+  assert.ok(available.some(model => model.id === "openai/gpt-6.1-sol"))
+  assert.ok(available.every(model => Object.keys(model).sort().join(",") === "id,name" && model.id.startsWith("openai/")))
+  assert.ok(!(models.stdout + models.stderr).includes(modelsAuth.openai.access))
+  assert.deepEqual(JSON.parse(readFileSync(modelsOutput, "utf8")), modelsAuth)
+  assert.equal(statSync(modelsOutput).mode & 0o777, 0o600)
+
+  // Unlike run, models must not wait for stdin to close.
+  const modelsWithoutInput = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["dist/cli.js", "models", "missing", "--json", "--timeout", "15"], {
+      stdio: ["pipe", "pipe", "pipe"],
+    })
+    let stdout = ""
+    let stderr = ""
+    child.stdout.setEncoding("utf8").on("data", (text) => { stdout += text })
+    child.stderr.setEncoding("utf8").on("data", (text) => { stderr += text })
+    child.on("error", reject)
+    const deadline = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("models waited for stdin")) }, 30_000)
+    child.on("close", (code) => { clearTimeout(deadline); resolve({ code, stdout, stderr }) })
+  })
+  assert.equal(modelsWithoutInput.code, 0, modelsWithoutInput.stderr)
+  assert.deepEqual(JSON.parse(modelsWithoutInput.stdout), [])
+
   const auth = {
     openai: { type: "oauth", methodID: "chatgpt-browser", access: "test-access", refresh: "test-refresh", expires: 123456, metadata: { accountID: "test-account" } },
     anthropic: { type: "key", key: "test-key" },
