@@ -90,6 +90,7 @@ Copy a workflow to get started:
 
 - [PR review](https://github.com/dbpolito/opencode-ci/blob/main/.github/workflows/opencode-review-pr.yml): builds and runs this checkout, attaches `review-pr`, and publishes findings.
 - [Auth keepalive](https://github.com/dbpolito/opencode-ci/blob/main/.github/workflows/opencode-auth.yml): makes a small model request daily or on manual dispatch, saving rotated OAuth tokens.
+- [Published package check](https://github.com/dbpolito/opencode-ci/blob/main/.github/workflows/opencode-smoke.yml): asks `opencode-ci@latest` to say hi daily or on manual dispatch.
 - [CI checks](https://github.com/dbpolito/opencode-ci/blob/main/.github/workflows/ci.yml): tests, typecheck, Node smoke test, and package validation.
 
 For another repository, replace `node dist/cli.js` with `npx --yes opencode-ci@latest`. The [setup guide](docs/github-actions.md) covers OAuth secrets, API keys, token rotation, and self-hosted runners.
@@ -108,11 +109,21 @@ Project config and plugins load by default. Use `--skip-project-config` to skip 
 
 ## Command options
 
-The CLI has `run`, `auth export`, and `--version`:
+The CLI has `run`, `models`, `auth export`, and `--version`:
 
 ```sh
 npx opencode-ci run --model openai/gpt-6-luna --agent build 'Review the changed files'
 ```
+
+List the models available to your CI credentials without sending a model request:
+
+```sh
+npx opencode-ci models
+npx opencode-ci models openai
+npx opencode-ci models --json
+```
+
+`models` uses the same default auth file and supports `--auth-file`, `--auth-env`, `--auth-output`, `--directory`, and `--skip-project-config`. Its default timeout is 120 seconds. JSON output contains only model IDs and names, not provider settings or credentials. This is the current catalog snapshot; it does not prove a live request will succeed.
 
 | `run` flag | What it does |
 | --- | --- |

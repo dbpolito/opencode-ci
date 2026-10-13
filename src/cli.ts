@@ -6,20 +6,35 @@ import { homedir, tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { text } from "node:stream/consumers"
 import { addAbortSignal } from "node:stream"
+import { format } from "node:util"
 import packageJSON from "../package.json" with { type: "json" }
 import { getAuth, loadAuth, loadAuthIfExists, parseAuth, saveAuth, setAuth, type Auth } from "./auth"
 import { run } from "./run"
 import { noninteractive } from "./noninteractive"
 import { createOutput } from "./mask"
+import { listModels } from "./models"
 
 let currentAuth: (() => Auth) | undefined
 const mask = createOutput(process.env, process.stdout, process.stderr, () => currentAuth?.())
 const { write, writeStatus } = mask
 
+// Some SDK/plugin diagnostics use console directly rather than the host logger.
+// Keep stdout machine-readable and apply the same secret masking to those logs.
+for (const method of ["log", "info", "debug", "warn", "error"] as const)
+  console[method] = (...args: unknown[]) => writeStatus(`${format(...args)}\n`)
+
 const collect = (value: string, previous: string[]) => [...previous, value]
 
-type RunFlags = {
+type HostFlags = {
   directory?: string
+  skipProjectConfig?: boolean
+  timeout: string
+  authFile?: string
+  authEnv?: string
+  authOutput?: string
+}
+
+type RunFlags = HostFlags & {
   model?: string
   variant?: string
   agent?: string
@@ -28,20 +43,18 @@ type RunFlags = {
   title?: string
   thinking?: boolean
   auto?: boolean
-  skipProjectConfig?: boolean
-  timeout: string
-  authFile?: string
-  authEnv?: string
-  authOutput?: string
 }
 
 let cancellation: "SIGINT" | "SIGTERM" | "timeout" | undefined
 let timeoutSeconds = 2700
 
-async function executeRun(words: string[], options: RunFlags) {
+async function executeWithHost(
+  options: HostFlags,
+  task: (client: OpenCode.Interface, directory: string, signal: AbortSignal) => Promise<void>,
+  prepare?: (signal: AbortSignal) => Promise<void>,
+) {
   const defaultAuthFile = join(homedir(), "opencode-ci.auth.json")
   const directory = resolve(options.directory ?? process.cwd())
-  const files = options.file.map((file) => resolve(directory, file))
   timeoutSeconds = Number(options.timeout)
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || timeoutSeconds * 1000 > 2_147_483_647)
     throw new Error("--timeout must be positive seconds, at most 2147483.647")
@@ -62,9 +75,7 @@ async function executeRun(words: string[], options: RunFlags) {
   process.on("SIGTERM", terminate)
   const timer = setTimeout(() => cancel("timeout"), timeoutSeconds * 1000)
   try {
-    const piped = process.stdin.isTTY ? "" : (await text(addAbortSignal(controller.signal, process.stdin))).trim()
-    const prompt = [words.join(" "), piped].filter(Boolean).join("\n")
-    if (!prompt.trim()) throw new Error("Provide a prompt or pipe one through stdin")
+    await prepare?.(controller.signal)
     controller.signal.throwIfAborted()
     const implicitAuth = !options.authFile && !options.authEnv
     const auth = options.authFile ? await loadAuth(options.authFile) : options.authEnv ? parseAuth(process.env[options.authEnv] ?? "") : await loadAuthIfExists(defaultAuthFile)
@@ -76,6 +87,7 @@ async function executeRun(words: string[], options: RunFlags) {
     try {
       const opencode = await OpenCode.create({
         database: { path: db }, plugins: [noninteractive],
+        log: { emit: (entry) => writeStatus(`[${entry.level}] ${entry.message}\n`) },
         ...(options.skipProjectConfig ? { config: { project: false } } : {}),
       })
       try {
@@ -84,11 +96,7 @@ async function executeRun(words: string[], options: RunFlags) {
           currentAuth = () => getAuth(db, Object.keys(auth))
         }
         controller.signal.throwIfAborted()
-        await run(opencode, {
-          directory, model: options.model, variant: options.variant, agent: options.agent, skills: options.skill, files,
-          title: options.title, thinking: options.thinking, auto: options.auto, prompt, signal: controller.signal,
-          write, writeStatus,
-        })
+        await task(opencode, directory, controller.signal)
       } finally {
         await opencode.close()
         // Save refreshed tokens even if the session failed. Never print secrets to stdout.
@@ -107,6 +115,21 @@ async function executeRun(words: string[], options: RunFlags) {
     process.off("SIGINT", interrupt)
     process.off("SIGTERM", terminate)
   }
+}
+
+async function executeRun(words: string[], options: RunFlags) {
+  let prompt = ""
+  await executeWithHost(options, async (client, directory, signal) => {
+    const files = options.file.map((file) => resolve(directory, file))
+    await run(client, {
+      directory, model: options.model, variant: options.variant, agent: options.agent, skills: options.skill, files,
+      title: options.title, thinking: options.thinking, auto: options.auto, prompt, signal, write, writeStatus,
+    })
+  }, async (signal) => {
+    const piped = process.stdin.isTTY ? "" : (await text(addAbortSignal(signal, process.stdin))).trim()
+    prompt = [words.join(" "), piped].filter(Boolean).join("\n")
+    if (!prompt.trim()) throw new Error("Provide a prompt or pipe one through stdin")
+  })
 }
 
 const program = new Command()
@@ -137,6 +160,22 @@ const command = program.command("run")
 command.action(async (words: string[], options: RunFlags) => {
   await executeRun(words, options)
 })
+
+program.command("models")
+  .description("List available models using CI credentials and project configuration")
+  .argument("[provider]", "filter by provider ID")
+  .option("--json", "print model IDs and names as JSON")
+  .option("--directory <path>", "project directory (default: current directory)")
+  .option("--skip-project-config", "skip project and ancestor config discovery, including project plugins")
+  .option("--timeout <seconds>", "timeout in seconds", "120")
+  .addOption(new Option("--auth-file <path>", "read auth JSON from a file (default: ~/opencode-ci.auth.json if present)").conflicts("authEnv"))
+  .addOption(new Option("--auth-env <name>", "read auth JSON from an environment variable").conflicts("authFile"))
+  .option("--auth-output <path>", "save refreshed auth JSON to a file (default: update ~/opencode-ci.auth.json when used)")
+  .action(async (provider: string | undefined, options: HostFlags & { json?: boolean }) => {
+    await executeWithHost(options, async (client, directory, signal) => {
+      write(await listModels(client, { directory, provider, json: options.json, signal }))
+    })
+  })
 
 program.command("auth")
   .description("Manage auth JSON for CI")

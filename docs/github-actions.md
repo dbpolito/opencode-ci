@@ -4,6 +4,7 @@ Start with the workflows in this repository:
 
 - [PR review](https://github.com/dbpolito/opencode-ci/blob/main/.github/workflows/opencode-review-pr.yml): runs this checkout, attaches `review-pr`, and publishes findings.
 - [Auth keepalive](https://github.com/dbpolito/opencode-ci/blob/main/.github/workflows/opencode-auth.yml): makes a small model request daily or on manual dispatch, saving rotated OAuth tokens.
+- [Published package check](https://github.com/dbpolito/opencode-ci/blob/main/.github/workflows/opencode-smoke.yml): asks `opencode-ci@latest` to say hi daily or on manual dispatch, without building the checkout.
 - [CI checks](https://github.com/dbpolito/opencode-ci/blob/main/.github/workflows/ci.yml): tests, typecheck, Node smoke test, and package validation.
 
 For another repository, replace `node dist/cli.js` with `npx --yes opencode-ci@latest` and remove the Bun install/build steps. Keep the skill installation and member checks.
@@ -25,6 +26,8 @@ The auth file is refreshed even after a failed session when cleanup completes. G
 Repository secrets are loaded when a workflow is queued. Concurrent jobs can rotate the same OAuth credential and overwrite each other's saved tokens. Reviews use per-PR concurrency and cancel older reviews when a PR changes; keepalive has its own concurrency group. These groups do not serialize all users of the credential. A failed refresh or interrupted write-back may require a fresh login and reseed.
 
 The keepalive request makes OpenCode check and refresh an expiring access token; copying the secret alone does not. Unchanged credentials are not rewritten. The daily schedule is a keepalive attempt, not a provider guarantee. Monitor failures.
+
+The published package check uses a fresh `npx --yes opencode-ci@latest` install, like an npm consumer. It loads the same OAuth secret, asks the configured model to say hi, and saves rotated tokens. It shares the keepalive's concurrency group so these two jobs do not rotate tokens simultaneously. Ordinary PR CI still tests the checkout with the frozen lockfile.
 
 ## API key
 
