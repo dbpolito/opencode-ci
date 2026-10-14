@@ -1,6 +1,7 @@
 import type { OpenCode } from "@opencode/sdk"
 import { preparePrompt } from "./prepare"
 import { renderTool } from "./render-tool"
+import { duration } from "./log"
 
 type Client = Pick<OpenCode.Interface, "session" | "message" | "event" | "skill" | "permission" | "model" | "form">
 
@@ -18,6 +19,9 @@ export type RunOptions = {
   signal?: AbortSignal
   write?: (text: string) => void
   writeStatus?: (text: string) => void
+  progressInterval?: number
+  deadline?: number
+  debug?: boolean
 }
 
 /** Run one CI turn against the OpenCode service. */
@@ -35,13 +39,22 @@ export async function run(client: Client, options: RunOptions) {
   const attachedSkills = new Map<string, string[]>()
   const renderedTools = new Set<string>()
   const tools = new Map<string, { name: string; input: Record<string, unknown> }>()
+  const active = new Map<string, { sessionID: string; name: string; input: Record<string, unknown>; started: number; shellID?: string }>()
+  const executing = new Set<string>()
+  const started = Date.now()
+  let lastActivity = started
+  let lastEvent = "connecting"
+  let completed = false
+  let progress: ReturnType<typeof setInterval> | undefined
   let failure: Error | undefined
   let rootID: string | undefined
   const terminal = Promise.withResolvers<void>()
   let interrupting: Promise<unknown> | undefined
   const stop = () => {
     if (rootID && !interrupting)
-      interrupting = client.session.interrupt({ sessionID: rootID }, { signal: AbortSignal.timeout(5000) }).catch(() => {})
+      interrupting = client.session.interrupt({ sessionID: rootID }, { signal: AbortSignal.timeout(5000) })
+        .then(() => writeStatus("[run] Session interruption acknowledged\n"))
+        .catch((error: unknown) => writeStatus(`[run] Session interruption failed: ${error instanceof Error ? error.message : String(error)}\n`))
   }
   options.signal?.addEventListener("abort", stop, { once: true })
   const checkCancelled = () => signal.throwIfAborted()
@@ -91,12 +104,32 @@ export async function run(client: Client, options: RunOptions) {
     line(sessionID, `> ${agent} · ${model}${skills}\n`)
   }
 
-  const toolLine = (sessionID: string, messageID: string, id: string, name: string, input: Record<string, unknown>, content?: ReadonlyArray<{ type: string; text?: string }>, metadata?: Record<string, unknown>, error?: string) => {
+  const toolLine = (sessionID: string, messageID: string, id: string, name: string, input: Record<string, unknown>, content?: ReadonlyArray<{ type: string; text?: string }>, metadata?: Record<string, unknown>, error?: string, elapsed?: number) => {
     const key = `${messageID}:${id}`
     if (renderedTools.has(key)) return
     renderedTools.add(key)
     const description = (name === "subagent" || name === "task") && typeof input.description === "string" ? input.description : ""
-    const text = renderTool({ name, input, content, metadata, error, directory: options.directory, prefixed: !!description, color: color() })
+    const text = renderTool({ name, input, content, metadata, error, directory: options.directory, prefixed: !!description, color: color(),
+      phase: elapsed === undefined ? undefined : "completed", elapsed, callID: options.debug ? key : undefined })
+    line(sessionID, description ? prefix(description, text) : text)
+  }
+
+  const activity = () => {
+    const now = Date.now()
+    const remaining = options.deadline === undefined ? "" : ` · remaining=${duration(options.deadline - now)}`
+    writeStatus(`[run] elapsed=${duration(now - started)}${remaining} · active tools=${active.size} · active sessions=${executing.size} · last activity=${lastEvent} ${duration(now - lastActivity)} ago\n`)
+    for (const [key, tool] of active) {
+      toolStarted(tool.sessionID, key, tool, "running", now - tool.started)
+    }
+    for (const id of executing) {
+      if (![...active.values()].some((tool) => tool.sessionID === id))
+        line(id, `[running] Session ${id} · waiting for model or next tool\n`)
+    }
+  }
+
+  const toolStarted = (sessionID: string, key: string, tool: { name: string; input: Record<string, unknown> }, phase: "started" | "running", elapsed?: number) => {
+    const description = (tool.name === "subagent" || tool.name === "task") && typeof tool.input.description === "string" ? tool.input.description : ""
+    const text = renderTool({ ...tool, directory: options.directory, prefixed: !!description, color: color(), phase, elapsed, callID: options.debug ? key : undefined })
     line(sessionID, description ? prefix(description, text) : text)
   }
 
@@ -192,6 +225,7 @@ export async function run(client: Client, options: RunOptions) {
     if (handledPermissions.has(request.id)) return
     handledPermissions.add(request.id)
     await client.permission.reply({ sessionID: request.sessionID, requestID: request.id, decision: options.auto ? "once" : "reject" }, { signal })
+    line(request.sessionID, `Permission ${options.auto ? "approved once" : "rejected"}: ${request.action} (${request.resources.join(", ")})\n`)
     if (options.auto) return
     failure ??= new Error(`Permission denied: ${request.action} (${request.resources.join(", ")})`)
     await client.session.interrupt({ sessionID: request.sessionID }, { signal })
@@ -207,6 +241,7 @@ export async function run(client: Client, options: RunOptions) {
       const event = item.value
       if (event.type === "session.created" && event.data.parentID && sessions.has(event.data.parentID)) {
         sessions.set(event.data.sessionID, { label: event.data.title ?? event.data.sessionID, parentID: event.data.parentID })
+        line(event.data.sessionID, `Subagent session created · ${event.data.sessionID}\n`)
       }
       if (event.type === "form.created") {
         if (sessions.has(event.data.form.sessionID) ||
@@ -215,6 +250,13 @@ export async function run(client: Client, options: RunOptions) {
         continue
       }
       if (!("sessionID" in event.data) || !sessions.has(event.data.sessionID)) continue
+      lastActivity = Date.now()
+      lastEvent = event.type
+      if (options.debug) line(event.data.sessionID, `[debug] ${event.type}\n`)
+      if (event.type === "session.execution.started") {
+        executing.add(event.data.sessionID)
+        line(event.data.sessionID, "Execution started\n")
+      }
       if (event.type === "session.text.ended") {
         print(event.data.sessionID, event.data.assistantMessageID, event.data.ordinal, event.data.text)
       }
@@ -222,6 +264,7 @@ export async function run(client: Client, options: RunOptions) {
         reasoning(event.data.sessionID, event.data.assistantMessageID, event.data.ordinal, event.data.text)
       }
       if (event.type === "session.step.started") {
+        executing.add(event.data.sessionID)
         heading(event.data.sessionID, event.data.assistantMessageID, event.data.agent, event.data.model.id)
       }
       if (event.type === "session.tool.input.started") {
@@ -229,13 +272,30 @@ export async function run(client: Client, options: RunOptions) {
       }
       if (event.type === "session.tool.called") {
         const key = `${event.data.assistantMessageID}:${event.data.id}`
-        tools.set(key, { name: tools.get(key)?.name ?? "tool", input: event.data.input })
+        const tool = { name: tools.get(key)?.name ?? "tool", input: event.data.input }
+        tools.set(key, tool)
+        if (!active.has(key)) {
+          active.set(key, { ...tool, sessionID: event.data.sessionID, started: Date.now() })
+          toolStarted(event.data.sessionID, key, tool, "started")
+        }
+      }
+      if (event.type === "session.tool.progress") {
+        const key = `${event.data.assistantMessageID}:${event.data.id}`
+        const tool = active.get(key)
+        const shellID = event.data.metadata?.shellID
+        if (tool && typeof shellID === "string" && tool.shellID !== shellID) {
+          tool.shellID = shellID
+          if (options.debug) line(event.data.sessionID, `[process · ${key}] shellID=${shellID}\n`)
+        }
       }
       if (event.type === "session.tool.success" || event.type === "session.tool.failed") {
         const key = `${event.data.assistantMessageID}:${event.data.id}`
         const tool = tools.get(key)
         tools.delete(key)
-        const finish = () => toolLine(event.data.sessionID, event.data.assistantMessageID, event.data.id, tool?.name ?? "tool", tool?.input ?? {}, event.data.content, event.data.metadata, event.type === "session.tool.failed" ? event.data.error.message : undefined)
+        const running = active.get(key)
+        active.delete(key)
+        const elapsed = running ? Date.now() - running.started : undefined
+        const finish = () => toolLine(event.data.sessionID, event.data.assistantMessageID, event.data.id, tool?.name ?? "tool", tool?.input ?? {}, event.data.content, event.data.metadata, event.type === "session.tool.failed" ? event.data.error.message : undefined, elapsed)
         if (tool?.name === "subagent" || tool?.name === "task") {
           // Recovery can involve I/O. Do not stop reading other children's live events.
           const pending = flushChild(event.data.sessionID, tool.input, event.data.metadata).then(finish).catch((error: unknown) => {
@@ -249,6 +309,10 @@ export async function run(client: Client, options: RunOptions) {
         line(event.data.sessionID, `Error: ${event.data.error.message}\n`)
         failure = new Error(event.data.error.message)
       }
+      if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed" || event.type === "session.execution.interrupted") {
+        executing.delete(event.data.sessionID)
+        line(event.data.sessionID, `Execution ${event.type.slice("session.execution.".length)}\n`)
+      }
       if ((event.type === "session.execution.succeeded" || event.type === "session.execution.failed" || event.type === "session.execution.interrupted") && event.data.sessionID === rootID)
         terminal.resolve()
       if (event.type === "permission.asked") {
@@ -258,6 +322,11 @@ export async function run(client: Client, options: RunOptions) {
   }
 
   try {
+    writeStatus(`[run] Connecting event stream · directory=${options.directory}\n`)
+    if ((options.progressInterval ?? 30_000) > 0) {
+      progress = setInterval(activity, options.progressInterval ?? 30_000)
+      progress.unref()
+    }
     checkCancelled()
     // Subscribe before creating the session: subscriptions are live-only.
     const connected = await events.next()
@@ -282,6 +351,7 @@ export async function run(client: Client, options: RunOptions) {
     }, { signal })
     rootID = session.id
     sessions.set(rootID, { label: "main" })
+    writeStatus(`[run] Session created · ${rootID}\n`)
     if (signal.aborted) stop()
     checkCancelled()
 
@@ -359,8 +429,12 @@ export async function run(client: Client, options: RunOptions) {
     await drainFinishes()
     checkCancelled()
     if (failure) throw failure
+    completed = true
     return session.id
   } finally {
+    clearInterval(progress)
+    writeStatus(`[run] ${completed ? "Completed" : options.signal?.aborted ? "Cancelled" : "Failed"} · elapsed=${duration(Date.now() - started)} · active tools=${active.size}\n`)
+    if (!completed) activity()
     options.signal?.removeEventListener("abort", stop)
     controller.abort()
     void events.return?.(undefined).catch(() => {})

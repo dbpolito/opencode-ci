@@ -13,6 +13,7 @@ import { run } from "./run"
 import { noninteractive } from "./noninteractive"
 import { createOutput } from "./mask"
 import { listModels } from "./models"
+import { renderLog } from "./log"
 
 let currentAuth: (() => Auth) | undefined
 const mask = createOutput(process.env, process.stdout, process.stderr, () => currentAuth?.())
@@ -32,6 +33,7 @@ type HostFlags = {
   authFile?: string
   authEnv?: string
   authOutput?: string
+  debug?: boolean
 }
 
 type RunFlags = HostFlags & {
@@ -43,6 +45,7 @@ type RunFlags = HostFlags & {
   title?: string
   thinking?: boolean
   auto?: boolean
+  progressInterval: string
 }
 
 let cancellation: "SIGINT" | "SIGTERM" | "timeout" | undefined
@@ -50,7 +53,7 @@ let timeoutSeconds = 2700
 
 async function executeWithHost(
   options: HostFlags,
-  task: (client: OpenCode.Interface, directory: string, signal: AbortSignal) => Promise<void>,
+  task: (client: OpenCode.Interface, directory: string, signal: AbortSignal, deadline: number) => Promise<void>,
   prepare?: (signal: AbortSignal) => Promise<void>,
 ) {
   const defaultAuthFile = join(homedir(), "opencode-ci.auth.json")
@@ -60,10 +63,12 @@ async function executeWithHost(
     throw new Error("--timeout must be positive seconds, at most 2147483.647")
 
   const controller = new AbortController()
+  const deadline = Date.now() + timeoutSeconds * 1000
   const cancel = (reason: "SIGINT" | "SIGTERM" | "timeout") => {
     // A second cancellation is a hard stop if a provider or cleanup is stuck.
     if (cancellation) process.exit(cancellation === "SIGTERM" ? 143 : cancellation === "SIGINT" ? 130 : 124)
     cancellation = reason
+    writeStatus(`[run] Cancelling: ${reason}; interrupting active work\n`)
     process.exitCode = reason === "SIGINT" ? 130 : reason === "SIGTERM" ? 143 : 124
     controller.abort(new Error(reason))
     // CI may send only one signal; do not leave a stuck provider or request running forever.
@@ -85,9 +90,10 @@ async function executeWithHost(
     const temp = await mkdtemp(join(tmpdir(), "opencode-ci-"))
     const db = join(temp, "opencode.db")
     try {
+      writeStatus(`[host] Initializing OpenCode · directory=${directory} · timeout=${timeoutSeconds}s\n`)
       const opencode = await OpenCode.create({
         database: { path: db }, plugins: [noninteractive],
-        log: { emit: (entry) => writeStatus(`[${entry.level}] ${entry.message}\n`) },
+        log: { level: options.debug ? "debug" : "info", emit: (entry) => writeStatus(renderLog(entry, options.debug)) },
         ...(options.skipProjectConfig ? { config: { project: false } } : {}),
       })
       try {
@@ -96,7 +102,7 @@ async function executeWithHost(
           currentAuth = () => getAuth(db, Object.keys(auth))
         }
         controller.signal.throwIfAborted()
-        await task(opencode, directory, controller.signal)
+        await task(opencode, directory, controller.signal, deadline)
       } finally {
         await opencode.close()
         // Save refreshed tokens even if the session failed. Never print secrets to stdout.
@@ -119,11 +125,15 @@ async function executeWithHost(
 
 async function executeRun(words: string[], options: RunFlags) {
   let prompt = ""
-  await executeWithHost(options, async (client, directory, signal) => {
+  const progressInterval = Number(options.progressInterval)
+  if (!Number.isFinite(progressInterval) || progressInterval < 0 || progressInterval * 1000 > 2_147_483_647)
+    throw new Error("--progress-interval must be nonnegative seconds, at most 2147483.647")
+  await executeWithHost(options, async (client, directory, signal, deadline) => {
     const files = options.file.map((file) => resolve(directory, file))
     await run(client, {
       directory, model: options.model, variant: options.variant, agent: options.agent, skills: options.skill, files,
       title: options.title, thinking: options.thinking, auto: options.auto, prompt, signal, write, writeStatus,
+      progressInterval: progressInterval * 1000, deadline, debug: options.debug,
     })
   }, async (signal) => {
     const piped = process.stdin.isTTY ? "" : (await text(addAbortSignal(signal, process.stdin))).trim()
@@ -153,6 +163,8 @@ const command = program.command("run")
   .option("--auto", "approve permission requests once")
   .option("--skip-project-config", "skip project and ancestor config discovery, including project plugins")
   .option("--timeout <seconds>", "timeout in seconds", "2700")
+  .option("--progress-interval <seconds>", "progress update interval (0 disables)", "30")
+  .option("--debug", "include detailed SDK diagnostics and event types")
   .addOption(new Option("--auth-file <path>", "read auth JSON from a file (default: ~/opencode-ci.auth.json if present)").conflicts("authEnv"))
   .addOption(new Option("--auth-env <name>", "read auth JSON from an environment variable").conflicts("authFile"))
   .option("--auth-output <path>", "save refreshed auth JSON to a file (default: update ~/opencode-ci.auth.json when used)")
@@ -168,6 +180,7 @@ program.command("models")
   .option("--directory <path>", "project directory (default: current directory)")
   .option("--skip-project-config", "skip project and ancestor config discovery, including project plugins")
   .option("--timeout <seconds>", "timeout in seconds", "120")
+  .option("--debug", "include detailed SDK diagnostics")
   .addOption(new Option("--auth-file <path>", "read auth JSON from a file (default: ~/opencode-ci.auth.json if present)").conflicts("authEnv"))
   .addOption(new Option("--auth-env <name>", "read auth JSON from an environment variable").conflicts("authFile"))
   .option("--auth-output <path>", "save refreshed auth JSON to a file (default: update ~/opencode-ci.auth.json when used)")

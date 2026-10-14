@@ -67,3 +67,28 @@ test("joins all non-shell text blocks and uses the upstream provider name", () =
   expect(renderTool({ directory, name: "websearch", input: { query: "docs" }, metadata: { provider: "opencode" } }))
     .toBe('◈ Web Search via OpenCode "docs"\n')
 })
+
+test("renders running calls with native tool icons and input details, without result bodies", () => {
+  expect(renderTool({ directory, name: "shell", input: { command: "bun test", timeout: 600000, workdir: "/tests" }, phase: "started", content: [{ type: "text", text: "not yet" }] }))
+    .toBe("\n$ bun test · running · cwd=/tests · timeout=10m 0s\n\n")
+  expect(renderTool({ directory, name: "read", input: { path: "src/a.ts", limit: 20 }, phase: "started" }))
+    .toBe("→ Read src/a.ts [limit=20] · running\n")
+  expect(renderTool({ directory, name: "grep", input: { pattern: "TODO", path: "src" }, phase: "started" }))
+    .toBe('✱ Grep "TODO" in src · running\n')
+  expect(renderTool({ directory, name: "subagent", input: { agent: "general", description: "Review tests" }, phase: "started" }))
+    .toBe("→ Review tests General Agent · running\n")
+})
+
+test("completion combines tool results, elapsed time and process outcome in one block", () => {
+  expect(renderTool({ directory, name: "shell", input: { command: "bun test" }, phase: "completed", elapsed: 125000, metadata: { exit: 0 }, content: [{ type: "text", text: "4 pass" }] }))
+    .toBe("\n$ bun test · completed · 2m 5s · exit=0\n4 pass\n\n")
+  expect(renderTool({ directory, name: "glob", input: { pattern: "*.ts" }, phase: "completed", elapsed: 200, metadata: { count: 3 } }))
+    .toBe('✱ Glob "*.ts" 3 matches · completed · 0s\n')
+  expect(renderTool({ directory, name: "shell", input: { command: "bun test" }, phase: "completed", elapsed: 1000, error: "command failed", content: [{ type: "text", text: "diagnostics" }] }))
+    .toBe("\n✗ bun test failed · 1s\ndiagnostics\ncommand failed\n\n")
+})
+
+test("running progress and debug call IDs use the same renderer", () => {
+  expect(renderTool({ directory, name: "bash", input: { command: "sleep 10" }, phase: "running", elapsed: 5000, callID: "msg:tool" }))
+    .toBe("\n$ sleep 10 · running · 5s · call=msg:tool\n\n")
+})
