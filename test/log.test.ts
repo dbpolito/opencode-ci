@@ -7,13 +7,13 @@ test("quiet internal SDK events by default, detailed diagnostics with debug", ()
   expect(renderLog(entry)).toBe("")
   expect(renderLog({ level: "info", message: "event" })).toBe("")
   expect(renderLog({ level: "debug", message: "internal" })).toBe("")
-  expect(renderLog(entry, true)).toContain("command: 'git'")
-  expect(renderLog(entry, true)).toContain("cwd: '/workspace'")
+  expect(renderLog(entry, true)).toContain('"command":"git"')
+  expect(renderLog(entry, true)).toContain('"cwd":"/workspace"')
 })
 
 test("warnings retain server/plugin context and error causes", () => {
   const output = renderLog({ level: "warn", message: "mcp connect failed", attributes: { server: "search" }, cause: new Error("connection refused") })
-  expect(output).toContain("server: 'search'")
+  expect(output).toContain('"server":"search"')
   expect(output).toContain("connection refused")
 })
 

@@ -202,3 +202,14 @@ test("stream disconnection aborts outstanding requests instead of waiting for ti
   await expect(f.execute()).rejects.toThrow("OpenCode event stream disconnected")
   expect(f.client.session.interrupt).toHaveBeenCalled()
 })
+
+test("fixture waits surface event consumer failures instead of hanging", async () => {
+  const f = fixture()
+  f.client.event.subscribe = async function* () {
+    yield { type: "server.connected", data: {} }
+    await f.prompted.promise
+    throw new Error("event consumer failed")
+  }
+  await expect(f.execute()).rejects.toThrow("event consumer failed")
+  expect(f.client.session.interrupt).toHaveBeenCalled()
+})

@@ -1,5 +1,3 @@
-import { inspect } from "node:util"
-
 type Entry = {
   level: string
   message: string
@@ -36,7 +34,8 @@ export function renderLog(entry: Entry, debug = false) {
     context.event = { type: event.type, id: event.id, sessionID: event.sessionID }
   }
   const suffix = Object.keys(context).length
-    ? ` ${inspect(details(context), { colors: false, depth: 8, breakLength: Infinity, compact: true, maxStringLength: null })}` : ""
+    // The output mask recognizes JSON escaping, not util.inspect's JS quoting.
+    ? ` ${JSON.stringify(details(context), (_, value) => typeof value === "bigint" ? String(value) : value)}` : ""
   return `[${entry.level}] ${entry.message}${suffix}\n`
 }
 

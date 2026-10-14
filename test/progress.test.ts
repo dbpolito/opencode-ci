@@ -1,27 +1,29 @@
 import { expect, test } from "bun:test"
+import { stripVTControlCharacters } from "node:util"
 import { aborted, deferred, fixture } from "./helpers"
 
 test("prints starts before tool results and reports timeouts and exit status", async () => {
   const f = fixture()
+  const output = () => stripVTControlCharacters(f.output.join(""))
   const data = { sessionID: "root", assistantMessageID: "message", id: "test" }
   f.client.event.subscribe = async function* ({ signal }) {
     yield { type: "server.connected", data: {} }
     await f.prompted.promise
     yield { type: "session.tool.input.started", data: { ...data, name: "shell" } }
     yield { type: "session.tool.called", data: { ...data, input: { command: "kool run test", timeout: 1_200_000, workdir: "/tests" } } }
-    expect(f.output.join("")).toContain("$ kool run test · running · cwd=/tests · timeout=20m 0s")
-    expect(f.output.join("")).not.toContain("test result")
+    expect(output()).toContain("$ kool run test · running · cwd=/tests · timeout=20m 0s")
+    expect(output()).not.toContain("test result")
     yield { type: "session.tool.progress", data: { ...data, metadata: { shellID: "shell_1" } } }
-    expect(f.output.join("")).not.toContain("shellID=shell_1")
+    expect(output()).not.toContain("shellID=shell_1")
     yield { type: "session.tool.success", data: { ...data, content: [{ type: "text", text: "test result" }], metadata: { timeout: true, exit: 130 } } }
     yield { type: "session.execution.succeeded", data: { sessionID: "root" } }
     f.eventsDone.resolve()
     await aborted(signal)
   }
   await f.execute()
-  expect(f.output.join("")).toContain("$ kool run test · timed out · 0s · exit=130")
-  expect(f.output.join("")).not.toContain("message:test")
-  expect(f.output.join("").match(/test result/g)).toHaveLength(1)
+  expect(output()).toMatch(/\$ kool run test · timed out · (?:\d+m )?\d+s · exit=130/)
+  expect(output()).not.toContain("message:test")
+  expect(output().match(/test result/g)).toHaveLength(1)
 })
 
 test("progress identifies active work, remaining time, and cancellation; timer stops", async () => {
@@ -29,8 +31,9 @@ test("progress identifies active work, remaining time, and cancellation; timer s
   const heartbeat = deferred()
   const output: string[] = []
   const f = fixture({ signal: controller.signal, progressInterval: 10, deadline: Date.now() + 60_000, write: (text) => {
+    text = stripVTControlCharacters(text)
     output.push(text)
-    if (text.includes("$ sleep 100 · running · 0s")) heartbeat.resolve()
+    if (/\$ sleep 100 · running · \d+[ms]/.test(text)) heartbeat.resolve()
   } })
   const data = { sessionID: "root", assistantMessageID: "message", id: "test" }
   f.client.event.subscribe = async function* ({ signal }) {

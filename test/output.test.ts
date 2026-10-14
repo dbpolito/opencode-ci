@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { installation, startup, refreshed } from "./fixtures/mask-output"
+import { installation, startup, refreshed, diagnosticPassword } from "./fixtures/mask-output"
 
 test("GitHub Actions stdout/stderr piped through tee contains no credentials or mask commands", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opencode-ci-mask-"))
@@ -12,7 +12,7 @@ test("GitHub Actions stdout/stderr piped through tee contains no credentials or 
       "bash", "-o", "pipefail", "-c", '"$1" "$2" 2>&1 | tee "$3"',
       "mask-test", process.execPath, join(import.meta.dir, "fixtures/mask-output.ts"), log,
     ], {
-      env: { PATH: process.env.PATH, GITHUB_ACTIONS: "true", GH_TOKEN: installation },
+      env: { PATH: process.env.PATH, GITHUB_ACTIONS: "true", GH_TOKEN: installation, PASSWORD: diagnosticPassword },
       stdout: "pipe", stderr: "pipe",
     })
     const [stdout, stderr, code] = await Promise.all([
@@ -26,7 +26,11 @@ test("GitHub Actions stdout/stderr piped through tee contains no credentials or 
     expect(captured.match(/^stdout \[REDACTED\]$/gm)).toHaveLength(21)
     expect(captured.match(/^stderr \[REDACTED\]$/gm)).toHaveLength(21)
     expect(captured).not.toContain("::add-mask::")
-    for (const secret of [installation, startup.openai.access, startup.openai.refresh, refreshed.openai.access, refreshed.openai.refresh]) {
+    expect(captured.match(/\[info\] spawning process/g)).toHaveLength(6)
+    expect(captured.match(/\[warn\] connection failed/g)).toHaveLength(6)
+    expect(captured).not.toContain("foo\\'bar")
+    expect(captured).toContain('"args":["-c","printf \\"%s\\" \\"[REDACTED]\\"; echo `pwd`"]')
+    for (const secret of [diagnosticPassword, installation, startup.openai.access, startup.openai.refresh, refreshed.openai.access, refreshed.openai.refresh]) {
       for (const variant of [secret, JSON.stringify(secret).slice(1, -1), encodeURIComponent(secret)]) {
         expect(captured).not.toContain(variant)
       }
