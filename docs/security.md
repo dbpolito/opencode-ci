@@ -16,6 +16,8 @@ This masks known values. It does not detect every secret in repository files, co
 
 Refreshed tokens must be in the auth database before output is emitted. Previously written files cannot be retroactively redacted. The runner creates no encrypted transcript or share link.
 
+SDK diagnostics redact sensitive attribute fields such as tokens, credentials, headers, and environment objects before formatting. Internal update events show their identity rather than configuration payloads. `--debug` still prints process arguments and error details: unknown secrets embedded in those strings may remain. Review debug captures before sharing or uploading them.
+
 ## Previously captured logs
 
 Earlier versions emitted secret-bearing `::add-mask::` lines on GitHub Actions. Uploaded logs captured with `tee` or redirection may contain credentials even when the console looks masked.

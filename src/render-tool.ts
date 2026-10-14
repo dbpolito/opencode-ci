@@ -1,4 +1,5 @@
 import { relative, resolve, isAbsolute, sep } from "node:path"
+import { duration } from "./log"
 
 type Tool = {
   name: string
@@ -9,6 +10,9 @@ type Tool = {
   directory: string
   prefixed?: boolean
   color?: boolean
+  phase?: "started" | "running" | "completed"
+  elapsed?: number
+  callID?: string
 }
 
 // The SDK exposes tool data, not @opencode/tui's private toolInlineInfo renderer.
@@ -80,10 +84,25 @@ export function renderTool(tool: Tool) {
     return { icon: "⚙", title: `${name} ${Object.keys(input).length ? JSON.stringify(input) : "Unknown"}` }
   })()
 
-  const title = `${label.icon} ${label.title}`
+  const running = tool.phase === "started" || tool.phase === "running"
+  const icon = running && name === "subagent" ? "→" : tool.phase && tool.error ? "✗" : label.icon
+  const title = `${icon} ${label.title}${tool.phase && tool.error ? " failed" : ""}`
   const description = "description" in label && label.description
     ? ` ${tool.color ? `\x1b[90m${label.description}\x1b[0m` : label.description}` : ""
   const block = "block" in label && label.block
-  const rendered = `${block ? "\n" : ""}${title}${description}\n${block && "body" in label && label.body?.trim() ? `${label.body.trim()}\n` : ""}${block ? "\n" : ""}`
+  const exit = tool.metadata?.exitCode ?? tool.metadata?.exit
+  const status = tool.phase ? [
+    running ? "running" : tool.metadata?.timeout === true ? "timed out" : tool.error ? "" : "completed",
+    tool.elapsed === undefined ? "" : duration(tool.elapsed),
+    !running && typeof exit === "number" ? `exit=${exit}` : "",
+    !running && typeof tool.metadata?.signal === "string" ? `signal=${tool.metadata.signal}` : "",
+    tool.phase === "started" && name === "shell" ? `cwd=${text(input.workdir) || tool.directory}` : "",
+    tool.phase === "started" && typeof input.timeout === "number" ? `timeout=${input.timeout === 0 ? "disabled" : duration(input.timeout)}` : "",
+    tool.callID ? `call=${tool.callID}` : "",
+  ].filter(Boolean).join(" · ") : ""
+  const suffix = status ? ` ${tool.color ? `\x1b[90m· ${status}\x1b[0m` : `· ${status}`}` : ""
+  const body = !running && block && "body" in label && label.body?.trim() ? `${label.body.trim()}\n` : ""
+  const rendered = `${block ? "\n" : ""}${title}${description}${suffix}\n${body}${tool.phase && tool.error ? `${tool.error}\n` : ""}${block ? "\n" : ""}`
+  if (tool.phase) return rendered
   return tool.error ? `${output ? rendered : ""}✗ ${label.title} failed\n${tool.error}\n` : rendered
 }

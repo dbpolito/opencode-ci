@@ -60,7 +60,7 @@ export function fixture(options: Partial<RunOptions> = {}) {
       command: mock(async (value: unknown) => { prompted.resolve() }),
       prompt: mock(async (value: unknown) => { prompted.resolve() }),
       wait: mock(async ({ sessionID }: { sessionID: string }, request?: { signal?: AbortSignal }) => {
-        if (sessionID === "root") await eventsDone.promise
+        if (sessionID === "root") await (request?.signal ? Promise.race([eventsDone.promise, aborted(request.signal)]) : eventsDone.promise)
         request?.signal?.throwIfAborted()
       }),
       list: mock(async ({ parentID }: { parentID: string }) => ({

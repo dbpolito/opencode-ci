@@ -56,6 +56,10 @@ Tool/status output goes to stderr. Redirected assistant text and requested reaso
 npx opencode-ci run --thinking 'Review this repository' > review.log 2>&1
 ```
 
+Tools use OpenCode's compact rendering as soon as they are called (`$` for shell, `→` for read, `✱` for search), with a running status. Completed tool blocks include elapsed time and available exit/timeout information alongside their results. Subagent sessions and execution outcomes are labelled too. Every 30 seconds, a progress update lists active work, time remaining, and the last session event. It reports activity, not proof that a command is making progress; tool output still appears on completion.
+
+Use `--progress-interval 60` for fewer updates, or `--progress-interval 0` to disable them. `--debug` includes call IDs, SDK process commands, arguments, working directories, internal event details, and session event types. Warnings retain diagnostic context and causes without debug mode. Cancellation reports outstanding tools and whether the session interruption request was acknowledged; acknowledgement does not confirm every external/container process exited.
+
 ### Secret masking
 
 Known environment and auth secrets, including refreshed tokens, are replaced with `[REDACTED]` on both streams. Raw, JSON-escaped, and URL-encoded forms are covered. The CLI emits no secret-bearing `::add-mask::` commands.
@@ -138,6 +142,8 @@ npx opencode-ci models --json
 | `--skip-project-config` | Skip project/ancestor configuration and plugin discovery; keep global configuration |
 | `--title TITLE` | Set the session title |
 | `--timeout SECONDS` | Stop after this many seconds (default: 2700) |
+| `--progress-interval SECONDS` | Progress update interval (default: 30; 0 disables) |
+| `--debug` | Include detailed SDK diagnostics and session event types |
 | `--auth-env NAME` | Read auth JSON from an environment variable |
 | `--auth-file PATH` | Read auth JSON from a specific file instead of `~/opencode-ci.auth.json` |
 | `--auth-output PATH` | Save refreshed auth JSON to a specific file (the default file is updated automatically) |
