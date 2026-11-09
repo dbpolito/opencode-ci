@@ -1,6 +1,6 @@
 # OpenCode's native auth import/export
 
-Checked against `/Users/danielpolito/Code/opencode-2`, commit `4c33a253aa` (September 29, 2026, [PR #52139](https://github.com/anomalyco/opencode/pull/52139)). The published V2 CLI/API docs did not yet describe the new commands and credential list/create endpoints when checked.
+The CLI import/export behavior below was checked against OpenCode commit `4c33a253aa` (September 29, 2026, [PR #52139](https://github.com/anomalyco/opencode/pull/52139)). The SDK review was updated for `@opencode/sdk@2.2.6`; the published [API reference](https://opencode.ai/docs/api) now includes credential list/create/update endpoints.
 
 ## Commands
 
@@ -33,12 +33,16 @@ Repeated import does **not** update rotated tokens. It is a transfer tool, not c
 
 Our current auth file is an object keyed by integration ID with one credential value per integration. Native exports are not accepted by `parseAuth` as-is. Do not substitute a native export in the current workflow.
 
-The new `credential.list()` and `credential.create()` SDK APIs are useful replacements for direct SQLite reads/writes in `src/auth.ts`. Our pinned `@opencode/sdk@2.0.16` has neither method, so this needs a compatible SDK upgrade and tests first.
+The current SDK exposes `credential.list()` and `credential.create()`. They are candidates for replacing database access, but not a drop-in replacement for all of it:
+
+- Before every output write, masking synchronously reads committed credentials so rotated tokens cannot be printed while an asynchronous credential refresh is pending. The runner reuses one read-only connection and prepared query for those reads, including shutdown and write-back.
+- The runner's key credential format accepts `configuration`; the SDK's current credential schema does not. Moving writes to the API must not silently drop existing fields.
+- Local `auth export --db` deliberately reads the source database read-only, without starting a service or applying migrations.
 
 A follow-up could:
 
 - Accept native exports alongside existing auth JSON, choosing the selected account for each integration.
-- Seed the private run host with `credential.create()` and read refreshed values with `credential.list()` while it is still open.
+- Seed the private run host with `credential.create()` once credential formats are reconciled. Use `credential.list()` only where asynchronous reads do not weaken pre-output masking or shutdown write-back.
 - Keep local masking up to date before output, retain old masks, and save write-back files atomically with mode `0600`.
 
-That would remove our dependency on OpenCode's SQLite layout and simplify local export. Calling the OpenCode CLI during a run would add an installation/service dependency without solving token write-back, so prefer the embedded SDK APIs.
+Moving seeding to the API would reduce our dependency on OpenCode's SQLite layout. Removing synchronous reads needs a masking design that also covers newly rotated tokens before any diagnostic output. Calling the OpenCode CLI during a run would add an installation/service dependency without solving token write-back.

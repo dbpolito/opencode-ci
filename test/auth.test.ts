@@ -5,7 +5,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { OpenCode } from "@opencode/sdk"
-import { getAuth, loadAuthIfExists, parseAuth, saveAuth, setAuth } from "../src/auth"
+import { getAuth, loadAuthIfExists, openAuthReader, parseAuth, saveAuth, setAuth } from "../src/auth"
+import { createOutput } from "../src/mask"
 
 const fixture = {
   openai: { type: "oauth" as const, methodID: "chatgpt-browser", access: "test-access", refresh: "test-refresh", expires: 123456, metadata: { accountID: "test-account" } },
@@ -85,4 +86,34 @@ test("imports and exports OAuth and key credentials through an isolated SDK data
     expect(JSON.parse(await readFile(defaultOutput, "utf8"))).toEqual({ openai: updated.openai })
     expect((await stat(defaultOutput)).mode & 0o777).toBe(0o600)
   } finally { await rm(temp, { recursive: true, force: true }) }
+})
+
+test("a reused read-only connection masks rotations before output and survives host shutdown", async () => {
+  const temp = await mkdtemp(join(tmpdir(), "opencode-ci-auth-reader-test-"))
+  const path = join(temp, "db.sqlite")
+  const host = await OpenCode.create({ database: { path } })
+  let reader: ReturnType<typeof openAuthReader> | undefined
+  try {
+    setAuth(path, fixture)
+    reader = openAuthReader(path, Object.keys(fixture))
+    expect(reader.read()).toEqual(fixture)
+    const output: string[] = []
+    const stream = { write: (text: string) => { output.push(text); return true } }
+    const mask = createOutput({}, stream, stream, reader.read)
+    mask.write(fixture.openai.access)
+
+    const rotated = { ...fixture, openai: { ...fixture.openai, access: "rotated-reader-access", refresh: "rotated-reader-refresh" } }
+    setAuth(path, rotated)
+    expect(reader.read()).toEqual(rotated)
+    mask.writeStatus(`${fixture.openai.access} ${rotated.openai.access} ${rotated.openai.refresh}`)
+    expect(output).toEqual(["[REDACTED]", "[REDACTED] [REDACTED] [REDACTED]"])
+
+    await host.close()
+    expect(reader.read()).toEqual(rotated)
+    expect(() => getAuth(path, ["missing"])).toThrow("Credential missing")
+  } finally {
+    reader?.close()
+    await host.close()
+    await rm(temp, { recursive: true, force: true })
+  }
 })
