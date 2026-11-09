@@ -56,8 +56,8 @@ export function parseAuth(source: string): Auth {
   }))
 }
 
-function database(path: string, callback: (db: DatabaseSync) => void, readOnly = false) {
-  const db = new DatabaseSync(path, { readOnly })
+function database(path: string, callback: (db: DatabaseSync) => void) {
+  const db = new DatabaseSync(path)
   try { callback(db) } finally { db.close() }
 }
 
@@ -83,17 +83,32 @@ export function setAuth(path: string, auth: Auth) {
 }
 
 export function getAuth(path: string, integrations: ReadonlyArray<string>): Auth {
-  const result: Auth = Object.create(null)
-  database(path, (db) => {
+  const reader = openAuthReader(path, integrations)
+  try { return reader.read() } finally { reader.close() }
+}
+
+/** Keep one read-only connection for synchronous, pre-output token masking. */
+export function openAuthReader(path: string, integrations: ReadonlyArray<string>) {
+  const db = new DatabaseSync(path, { readOnly: true })
+  try {
     // Match OpenCode's preferred connection: active first, then newest.
     const query = db.prepare("SELECT value FROM credential WHERE integration_id = ? ORDER BY active DESC, time_created DESC, id DESC LIMIT 1")
-    for (const integrationID of integrations) {
-      const row = query.get(integrationID) as { value: string } | undefined
-      if (!row) throw new Error(`Credential missing after run: ${integrationID}`)
-      Object.defineProperty(result, integrationID, { value: JSON.parse(row.value), enumerable: true, configurable: true, writable: true })
+    return {
+      read(): Auth {
+        const result: Auth = Object.create(null)
+        for (const integrationID of integrations) {
+          const row = query.get(integrationID) as { value: string } | undefined
+          if (!row) throw new Error(`Credential missing after run: ${integrationID}`)
+          Object.defineProperty(result, integrationID, { value: JSON.parse(row.value), enumerable: true, configurable: true, writable: true })
+        }
+        return parseAuth(JSON.stringify(result))
+      },
+      close() { db.close() },
     }
-  }, true)
-  return parseAuth(JSON.stringify(result))
+  } catch (error) {
+    db.close()
+    throw error
+  }
 }
 
 /** Write a new secret file atomically with owner-only permissions. */

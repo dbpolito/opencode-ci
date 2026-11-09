@@ -8,7 +8,7 @@ import { text } from "node:stream/consumers"
 import { addAbortSignal } from "node:stream"
 import { format } from "node:util"
 import packageJSON from "../package.json" with { type: "json" }
-import { getAuth, loadAuth, loadAuthIfExists, parseAuth, saveAuth, setAuth, type Auth } from "./auth"
+import { getAuth, loadAuth, loadAuthIfExists, openAuthReader, parseAuth, saveAuth, setAuth, type Auth } from "./auth"
 import { run } from "./run"
 import { noninteractive } from "./noninteractive"
 import { createOutput } from "./mask"
@@ -96,20 +96,28 @@ async function executeWithHost(
         log: { level: options.debug ? "debug" : "info", emit: (entry) => writeStatus(renderLog(entry, options.debug)) },
         ...(options.skipProjectConfig ? { config: { project: false } } : {}),
       })
+      let authReader: ReturnType<typeof openAuthReader> | undefined
       try {
         if (auth) {
           setAuth(db, auth)
-          currentAuth = () => getAuth(db, Object.keys(auth))
+          authReader = openAuthReader(db, Object.keys(auth))
+          currentAuth = authReader.read
         }
         controller.signal.throwIfAborted()
         await task(opencode, directory, controller.signal, deadline)
       } finally {
-        await opencode.close()
-        // Save refreshed tokens even if the session failed. Never print secrets to stdout.
-        if (auth) {
-          const refreshed = getAuth(db, Object.keys(auth))
-          mask.auth(refreshed)
-          if (authOutput) await saveAuth(authOutput, refreshed)
+        try {
+          try { await opencode.close() } finally {
+            // Preserve rotated tokens even if the task or host shutdown failed.
+            if (authReader) {
+              const refreshed = authReader.read()
+              mask.auth(refreshed)
+              if (authOutput) await saveAuth(authOutput, refreshed)
+            }
+          }
+        } finally {
+          currentAuth = undefined
+          authReader?.close()
         }
       }
     } finally {
