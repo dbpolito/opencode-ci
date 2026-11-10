@@ -164,6 +164,14 @@ npm pack --dry-run
 
 The Node smoke test also checks timeout handling, inherited CI variables, and child-session question restrictions without a model request. `npm publish` builds the package automatically through `prepack`.
 
+### Releasing
+
+The [publish workflow](.github/workflows/publish.yml) publishes to npm when a GitHub release is published. It runs tests, typecheck, and the Node smoke test before publishing with provenance. Stable releases use the `latest` npm tag; GitHub prereleases use `next`.
+
+One-time setup: in the npm package's settings, add a **trusted publisher** for GitHub Actions with owner `dbpolito`, repository `opencode-ci`, and workflow filename `publish.yml`. No npm token secret is required.
+
+To release, update `version` in `package.json`, commit it, and publish a GitHub release with a matching tag (for example, `v0.1.22` for version `0.1.22`). The workflow checks out that tag and rejects version mismatches. Each release must use a version that has not already been published to npm.
+
 ## License
 
 [MIT](LICENSE)
